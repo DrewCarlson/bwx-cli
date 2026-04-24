@@ -96,8 +96,9 @@ impl Default for Vec {
     fn default() -> Self {
         let data = Box::new(FixedVec::<LEN>::new());
         let lock = match MLOCK_WORKS.get() {
-            Some(true) => try_mlock(data.as_ptr(), FixedVec::<LEN>::capacity())
-                .ok(),
+            Some(true) => {
+                try_mlock(data.as_ptr(), FixedVec::<LEN>::capacity()).ok()
+            }
             Some(false) => None,
             None => {
                 match try_mlock(data.as_ptr(), FixedVec::<LEN>::capacity()) {
