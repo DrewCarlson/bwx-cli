@@ -1,333 +1,222 @@
 # rbw
 
-This is an unofficial command line client for
-[Bitwarden](https://bitwarden.com/). Although Bitwarden does come with its own
-[command line client](https://help.bitwarden.com/article/cli/), it is
-limited by being stateless - to use it, you're required to manually lock and
-unlock the client, and pass the temporary keys around in environment variables,
-which makes it very difficult to use. `rbw` avoids this problem by
-maintaining a background process which is able to hold the keys in memory,
-similar to the way that `ssh-agent` or `gpg-agent` work. This allows the client
-to be used in a much simpler way, with the background agent taking care of
-maintaining the necessary state.
+Unofficial [Bitwarden](https://bitwarden.com/) CLI with a persistent
+background agent — commands don't re-prompt for the master password on
+every use, similar to `ssh-agent`.
 
-## Maintenance
+This fork adds first-class macOS support: Touch ID unlock, native
+password dialogs, SSH commit signing, and a one-shot setup command.
+On Linux/BSD it's a drop-in replacement for upstream rbw.
 
-I consider `rbw` to be essentially feature-complete for me at this point. While
-I still use it on a daily basis, and will continue to fix regressions as they
-occur, I am unlikely to spend time implementing new features on my own. If you
-would like to see new functionality in `rbw`, I am more than happy to review
-and merge pull requests implementing those features.
+## Features
 
-## Installation
+- **Persistent agent.** Vault keys live in memory until `lock_timeout`
+  of inactivity.
+- **Touch ID unlock (macOS).** Enroll once, and biometry replaces the
+  master password. The password is only re-entered at enrollment time
+  or when biometry is invalidated.
+- **Per-operation biometric gate.** Optionally require Touch ID before
+  each vault read or SSH sign, with one prompt per `rbw <command>`.
+- **Native macOS prompts.** Master password + 2FA code entry render as
+  system Aqua dialogs; pinentry isn't required.
+- **SSH agent built in.** Serve vault-stored SSH keys, including git
+  commit/tag signing via `gpg.format = ssh`.
+- **GUI-app integration.** `rbw setup-macos` wires `SSH_AUTH_SOCK` into
+  launchd so IntelliJ, GitHub Desktop, Finder-launched tools, etc. see
+  the agent without per-app config.
 
-### Arch Linux
+## Install
 
-`rbw` is available in the [extra
-repository](https://archlinux.org/packages/extra/x86_64/rbw/).
-Alternatively, you can install
-[`rbw-git`](https://aur.archlinux.org/packages/rbw-git/) from the AUR, which
-will always build from the latest master commit.
+### macOS
 
-### Debian/Ubuntu
+```sh
+git clone <fork-url> rbw && cd rbw
+./scripts/install.sh          # build, install, code-sign
+rbw setup-macos               # LaunchAgents + SSH_AUTH_SOCK for GUI apps
+```
 
-`rbw` is officially packaged for Debian as
-[`rust-rbw`](https://tracker.debian.org/pkg/rust-rbw) and is available in
-testing (forky). You can install it using `sudo apt install rbw`.
+### Everywhere else
 
-Alternatively, you can download a Debian package from
-[https://git.tozt.net/rbw/releases/deb/
-](https://git.tozt.net/rbw/releases/deb/). The packages are signed by
-[`minisign`](https://github.com/jedisct1/minisign), and can be verified using
-the public key `RWTM0AZ5RpROOfAIWx1HvYQ6pw1+FKwN6526UFTKNImP/Hz3ynCFst3r`.
-
-### Fedora/EPEL
-
-`rbw` is available in [Fedora and EPEL 9](https://bodhi.fedoraproject.org/updates/?packages=rust-rbw)
-(for RHEL and compatible distributions).
-
-You can install it using `sudo dnf install rbw`.
-
-### Homebrew
-
-`rbw` is available in the [Homebrew repository](https://formulae.brew.sh/formula/rbw). You can install it via `brew install rbw`.
-
-### Nix
-
-`rbw` is available in the
-[NixOS repository](https://search.nixos.org/packages?show=rbw). You can try
-it out via `nix-shell -p rbw`.
-
-### Alpine
-
-`rbw` is available in the [community repository](https://pkgs.alpinelinux.org/packages?name=rbw). You can install it with `apk add rbw`.
-
-### Other
-
-With a working Rust installation, `rbw` can be installed via `cargo install
---locked rbw`. This requires that the
-[`pinentry`](https://www.gnupg.org/related_software/pinentry/index.en.html)
-program is installed (to display password prompts).
-
-## Configuration
-
-Configuration options are set using the `rbw config` command. Available
-configuration options:
-
-* `email`: The email address to use as the account name when logging into the
-  Bitwarden server. Required.
-* `sso_id`: The SSO organization ID. Defaults to regular login process if unset.
-* `base_url`: The URL of the Bitwarden server to use. Defaults to the official
-  server at `https://api.bitwarden.com/` if unset.
-* `identity_url`: The URL of the Bitwarden identity server to use. If unset,
-  will use the `/identity` path on the configured `base_url`, or
-  `https://identity.bitwarden.com/` if no `base_url` is set.
-* `ui_url`: The URL of the Bitwarden UI to use. If unset,
-  will default to `https://vault.bitwarden.com/`.
-* `notifications_url`: The URL of the Bitwarden notifications server to use.
-  If unset, will use the `/notifications` path on the configured `base_url`,
-  or `https://notifications.bitwarden.com/` if no `base_url` is set.
-* `lock_timeout`: The number of seconds to keep the master keys in memory for
-  before requiring the password to be entered again. Defaults to `3600` (one
-  hour).
-* `sync_interval`: `rbw` will automatically sync the database from the server
-  at an interval of this many seconds, while the agent is running. Setting
-  this value to `0` disables this behavior. Defaults to `3600` (one hour).
-* `pinentry`: The
-  [pinentry](https://www.gnupg.org/related_software/pinentry/index.html)
-  executable to use. Defaults to `pinentry`.
-
-### Profiles
-
-`rbw` supports different configuration profiles, which can be switched
-between by using the `RBW_PROFILE` environment variable. Setting it to a name
-(for example, `RBW_PROFILE=work` or `RBW_PROFILE=personal`) can be used to
-switch between several different vaults - each will use its own separate
-configuration, local vault, and agent.
+| Platform        | Command                                   |
+|-----------------|-------------------------------------------|
+| Arch            | `pacman -S rbw` (or `rbw-git` from AUR)   |
+| Debian / Ubuntu | `apt install rbw`                         |
+| Fedora / EPEL   | `dnf install rbw`                         |
+| Homebrew        | `brew install rbw`                        |
+| Nix             | `nix-shell -p rbw`                        |
+| Alpine          | `apk add rbw`                             |
+| From source     | `cargo install --locked rbw` + `pinentry` |
 
 ## Usage
 
-Commands can generally be used directly, and will handle logging in or
-unlocking as necessary. For instance, running `rbw ls` will run `rbw unlock` to
-unlock the password database before generating the list of entries (but will
-not attempt to log in to the server), `rbw sync` will automatically run `rbw
-login` to log in to the server before downloading the password database (but
-will not unlock the database), and `rbw add` will do both.
-
-Logging into the server and unlocking the database will only be done as
-necessary, so running `rbw login` when you are already logged in will do
-nothing, and similarly for `rbw unlock`. If necessary, you can explicitly log
-out by running `rbw purge`, and you can explicitly lock the database by running
-`rbw lock` or `rbw stop-agent`.
-
-`rbw help` can be used to get more information about the available
-functionality.
-
-Run `rbw get <name>` to get your passwords. If you also want to get the username
-or the note associated, you can use the flag `--full`. You can also use the flag
-`--field={field}` to get whatever default or custom field you want. The `--raw`
-flag will show the output as JSON. In addition to matching against the name,
-you can pass a UUID as the name to search for the entry with that id, or a
-URL to search for an entry with a matching website entry.
-
-*Note to users of the official Bitwarden server (at bitwarden.com)*: The
-official server has a tendency to detect command line traffic as bot traffic
-(see [this issue](https://github.com/bitwarden/cli/issues/383) for details). In
-order to use `rbw` with the official Bitwarden server, you will need to first
-run `rbw register` to register each device using `rbw` with the Bitwarden
-server. This will prompt you for your personal API key which you can find using
-the instructions [here](https://bitwarden.com/help/article/personal-api-key/).
-
-### SSH Agent
-
-`rbw-agent` includes a built-in SSH agent for signing SSH authentication
-challenges directly. To use it, ensure that rbw is running (in order to make
-it start handling ssh agent requests), and then point your SSH client to the
-SSH agent socket:
-
 ```sh
-rbw unlock
-export SSH_AUTH_SOCK="$XDG_RUNTIME_DIR/rbw/ssh-agent-socket"
+rbw config set email you@example.com
+rbw config set base_url https://vault.example.com   # self-hosted only
+
+rbw register        # only for the official bitwarden.com server
+rbw login           # master password + 2FA
+rbw sync
+
+rbw add <name>
+rbw ls
+rbw get <name>      # --full for notes, --field for a specific field,
+                    # --raw for JSON
+rbw code <name>     # TOTP
+rbw edit <name>     # opens $EDITOR
+rbw remove <name>
+rbw lock            # drop keys from memory
+
+rbw help            # full reference
 ```
 
-If you're using a profile, the socket will be located at
-`"XDG_RUNTIME_DIR/rbw-<profile>/ssh-agent-socket"`.
+Commands auto-unlock and auto-login as needed. `rbw get` accepts a
+name, UUID, or URL.
 
-### 2FA support
+**Bitwarden.com users:** run `rbw register` once with your
+[personal API key](https://bitwarden.com/help/article/personal-api-key/)
+before `rbw login`. The official server's bot detection rejects CLI
+clients that haven't registered.
 
-`rbw` supports the following 2FA mechanisms :
+## Touch ID unlock (macOS)
 
-* Email
-* Authenticator App
-* Yubico OTP security key (https://support.yubico.com/hc/en-us/articles/360013712639-Testing-Yubico-OTP)
-
-WebAuthn / Passkey and Duo security are unsupported 2FA mechanisms.
-
-If you use only unsupported 2FA mechanism, you need to add a supported 2FA
-mechanism on your bitwarden account to use rbw. It allows you to use rbw
-with a supported mechanism, and use other clients with you preferred
-2FA mechanism.
-
-## Touch ID on macOS
-
-`rbw` integrates with Touch ID in two layers:
-
-1. **Authorization gate** (`touchid_gate`): pops a biometric prompt
-   before serving sensitive responses (vault reads, ssh signs). The
-   master password still unlocks the vault normally.
-2. **Keychain-wrapped vault key** (`rbw touchid enroll`): stores a
-   random wrapper key in the macOS Keychain under a `BiometryCurrentSet`
-   ACL. After enrollment, Touch ID replaces the master-password prompt
-   on unlock entirely. The master password is not stored.
+Enroll once:
 
 ```sh
-# On macOS, install via the helper so the binaries come out code-signed;
-# on Linux/BSD just run cargo install as usual.
-./scripts/install.sh          # wraps `cargo install --path . --locked --force`
-
-rbw stop-agent
-rbw unlock                              # master password once
-rbw touchid enroll                      # wraps vault keys into Keychain
-rbw config set touchid_gate all         # or `signing`, or `off`
-rbw stop-agent                          # pick up the new blob
-
-rbw get google.com                      # Touch ID prompt, then password
-rbw touchid status                      # show enrollment + current gate
-rbw touchid disable                     # remove Keychain item + blob
+rbw unlock                  # master password
+rbw touchid enroll          # wrap vault keys under a biometric key
+rbw touchid status          # confirm
 ```
 
-Gate scopes:
+After enrollment Touch ID alone unlocks the vault. The master password
+is needed again only if you `rbw touchid disable`, change your
+enrolled fingerprint set, or re-authenticate with the server.
 
-- `off` — no biometric prompt (default).
-- `signing` — gates only ssh-agent signs and `rbw code` TOTP output.
-- `all` — gates every response carrying plaintext secret material.
-
-### Code-signing on macOS
-
-Unsigned binaries get killed by AMFI when they try to talk to the
-Keychain. `./scripts/install.sh` handles this automatically: after
-`cargo install` it runs `./scripts/sign-macos.sh`, which picks the
-strongest signing identity available on your machine:
-
-1. `$IDENTITY` env var (explicit override).
-2. **Developer ID Application** cert (the `$99/year` paid tier).
-   Attaches a `keychain-access-groups = <TEAMID>.rbw` entitlement; the
-   Keychain item stores the wrapper key under an OS-enforced
-   `kSecAccessControlBiometryCurrentSet` ACL. Every read is
-   cryptographically gated by Touch ID.
-3. **Apple Development** cert (free via Xcode). Signs the binary but
-   *without* the entitlement — that combination requires a
-   provisioning profile, which CLI tools can't carry. Falls through to
-   the plain Keychain path.
-4. **Ad-hoc** (no cert). Plain Keychain path.
-
-Tiers 3 and 4 are functionally equivalent: the Keychain item itself is
-only protected by `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, and
-Touch ID enforcement lives in rbw-agent's own `LAContext::evaluate_policy`
-call before every retrieval. That's strictly weaker than tier 2 (a
-compromised user-level process could read the raw wrapper key from
-Keychain without triggering Touch ID) but on a single-user Mac is
-equivalent in practice to tier 2, since a user-level attacker would
-also have rbw-agent's memory.
-
-Run the sign step manually if you ever `cargo install` without the
-wrapper:
+Optionally prompt Touch ID on each sensitive operation:
 
 ```sh
-./scripts/sign-macos.sh                 # signs ~/.cargo/bin/rbw{,-agent}
-./scripts/sign-macos.sh /path/to/bindir # another install prefix
+rbw config set touchid_gate all       # every vault read + sign
+rbw config set touchid_gate signing   # only SSH signs + TOTP codes
+rbw config set touchid_gate off       # default
 ```
 
-## Signing git commits with rbw
+Prompts are coalesced: one `rbw <command>` triggers one Touch ID
+dialog regardless of how many internal decrypts it performs.
 
-If you store an SSH key (Bitwarden cipher type "SSH Key") in your vault,
-`rbw-agent` acts as an SSH agent that can sign git commits and tags using
-OpenSSH's `sshsig` format (the one git uses when `gpg.format = ssh`).
+## SSH agent & git commit signing
 
-Point your shell at the agent and configure git:
+rbw-agent exposes an SSH agent that serves SSH keys stored in your
+vault. Store an "SSH Key" item, then:
 
 ```sh
+# Configured automatically by `rbw setup-macos`; explicit equivalent:
 export SSH_AUTH_SOCK="$(rbw ssh-socket)"
 
+ssh-add -L                  # list keys
+ssh user@host               # authenticate with a vault-stored key
+```
+
+Git commit signing via `gpg.format = ssh`:
+
+```sh
 git config --global gpg.format ssh
-# Use the public key you stored in Bitwarden under an entry named e.g. "git":
-git config --global user.signingkey "$(rbw ssh-public-key git)"
+git config --global user.signingkey "$(rbw ssh-public-key <entry>)"
 git config --global commit.gpgsign true
 git config --global tag.gpgsign true
 
-# Optional: populate the allowed_signers file for `git log --show-signature`:
+# Optional, for `git log --show-signature`:
 rbw ssh-allowed-signers > ~/.config/git/allowed_signers
 git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
 ```
 
-### Using git-signing from GUI apps on macOS
-
-GUI apps launched from Finder/Spotlight/Dock (IntelliJ, VS Code, GitHub
-Desktop, etc.) do not inherit `SSH_AUTH_SOCK` from your shell's rc file.
-They pick up whatever was in `launchd`'s environment at login. To make
-`rbw-agent`'s socket available to those apps, set the variable via
-`launchctl`:
-
-```sh
-# Current login session only:
-launchctl setenv SSH_AUTH_SOCK "$(rbw ssh-socket)"
-# Fully quit and relaunch the GUI app (Cmd-Q, not just close-window).
-```
-
-To persist across reboots, install a LaunchAgent that runs at login:
-
-```sh
-mkdir -p ~/Library/LaunchAgents ~/bin
-cat > ~/bin/rbw-set-ssh-sock <<'EOF'
-#!/bin/sh
-exec /usr/bin/launchctl setenv SSH_AUTH_SOCK "$("$HOME/.cargo/bin/rbw" ssh-socket)"
-EOF
-chmod +x ~/bin/rbw-set-ssh-sock
-
-cat > ~/Library/LaunchAgents/net.tozt.rbw.ssh-auth-sock.plist <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>net.tozt.rbw.ssh-auth-sock</string>
-  <key>RunAtLoad</key><true/>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$HOME/bin/rbw-set-ssh-sock</string>
-  </array>
-</dict>
-</plist>
-EOF
-launchctl load ~/Library/LaunchAgents/net.tozt.rbw.ssh-auth-sock.plist
-```
-
-`launchctl setenv` only affects new GUI apps, so fully quit and relaunch
-the editor after loading the agent.
-
-Note that `rbw-agent` itself is not started by this script — it spawns
-lazily the first time any `rbw <command>` runs. If no `rbw` command has
-executed this login session, GUI git will fail with `Couldn't find key in
-agent?` until you run something like `rbw unlock` once.
-
-In IntelliJ IDEs: **Settings → Version Control → Git** must be set to
-"Native" (not "Built-in"); the built-in JGit doesn't honor
-`gpg.format = ssh`.
-
-Add a confirmation prompt before every signature (guards against a running
-process silently signing commits while the agent is unlocked):
+Add a confirmation prompt before each signature (defence in depth
+against a process silently signing while the agent is unlocked):
 
 ```sh
 rbw config set ssh_confirm_sign true
 ```
 
-The pinentry dialog will display the entry name; accepting produces the
-signature, cancelling returns an error to git.
+**GUI git clients** (IntelliJ, GitHub Desktop) only see
+`SSH_AUTH_SOCK` from launchd's environment, which is what
+`rbw setup-macos` populates. After running it, Cmd-Q any already-open
+editor and relaunch — they only pick up the new env on launch.
 
-## Related projects
+**IntelliJ IDEs specifically:** Settings → Version Control → Git →
+"Native" (not Built-in). JGit doesn't honor `gpg.format = ssh`.
 
-* [rofi-rbw](https://github.com/fdw/rofi-rbw): A rofi frontend for Bitwarden
-* [bw-ssh](https://framagit.org/Glandos/bw-ssh/): Manage SSH key passphrases in Bitwarden
-* [rbw-menu](https://github.com/rbuchberger/rbw-menu): Tiny menu picker for rbw
-* [ulauncher-rbw](https://0xacab.org/varac-projects/ulauncher-rbw): [Ulauncher](https://ulauncher.io/) rbw extension
-* [fuzzel-rbw](https://github.com/sammhansen/fuzzel-rbw): A fuzzel frontend for Bitwarden
+## Configuration
+
+```sh
+rbw config set <key> <value>
+rbw config show                  # all keys (JSON)
+rbw config show <key>            # single value
+rbw config unset <key>
+```
+
+| Key | Default | |
+|---|---|---|
+| `email` | — | Required. |
+| `base_url` | `https://api.bitwarden.com` | Self-hosted server URL. |
+| `lock_timeout` | `3600` | Seconds idle → re-lock. |
+| `sync_interval` | `3600` | Seconds between auto-syncs. `0` disables. |
+| `touchid_gate` | `off` | `off` / `signing` / `all`. |
+| `macos_unlock_dialog` | `true` (macOS) | Native dialog vs. pinentry. |
+| `ssh_confirm_sign` | `false` | Pinentry CONFIRM before each SSH sign. |
+| `pinentry` | `pinentry` | Pinentry binary to use. |
+
+### Profiles
+
+Set `RBW_PROFILE=<name>` to keep an independent vault, config, and
+agent under that name.
+
+## 2FA
+
+Supported: Email, Authenticator App, Yubico OTP security key.
+
+Not supported: WebAuthn / Passkey, Duo. Add a supported mechanism
+alongside them — rbw will use the supported one while your web/mobile
+clients keep whichever you prefer.
+
+---
+
+# Appendix: macOS internals
+
+## Code signing
+
+`cargo install` produces unsigned binaries; macOS AMFI kills unsigned
+processes that touch the Keychain. `scripts/install.sh` wraps
+`cargo install` and runs `scripts/sign-macos.sh`, which auto-picks the
+strongest signing identity on your machine:
+
+1. `$IDENTITY` env var (explicit override).
+2. Developer ID Application cert (paid Apple Developer program).
+3. Apple Development cert (free via Xcode).
+4. Ad-hoc.
+
+Keychain security varies by tier:
+
+| Identity                 | Keychain item ACL                                |
+|--------------------------|--------------------------------------------------|
+| Developer ID Application | OS-enforced biometric ACL — strongest.           |
+| Apple Development        | Plain item; Touch ID enforced by rbw-agent only. |
+| Ad-hoc                   | Same as Apple Development.                       |
+
+Only Developer ID Application carries `keychain-access-groups` on a
+CLI binary; the other tiers would need a provisioning profile, which
+bare binaries can't have. The runtime detects which entitlements the
+installed binary actually holds and branches automatically — the same
+source builds all three tiers. Upgrading tiers later: re-run
+`./scripts/install.sh`, then `rbw touchid disable && rbw touchid enroll`
+to migrate the Keychain item.
+
+## `rbw setup-macos`
+
+Installs two LaunchAgents under `~/Library/LaunchAgents/`:
+
+- **`net.tozt.rbw.ssh-auth-sock`** — runs `~/bin/rbw-set-ssh-sock` at
+  login, which calls `launchctl setenv SSH_AUTH_SOCK $(rbw ssh-socket)`.
+  Puts the socket into launchd's environment so GUI apps inherit it.
+- **`net.tozt.rbw.agent`** — runs `rbw-agent --no-daemonize` under
+  launchd supervision with `KeepAlive`. Log output lands in
+  `~/Library/Application Support/rbw/launchd-agent.{out,err}`.
+
+`rbw teardown-macos` unloads both and removes the files.
