@@ -13,8 +13,15 @@
 //! Then run with:
 //!
 //! ```sh
-//! cargo test --test e2e -- --ignored
+//! cargo test --test e2e -- --ignored --test-threads=1
 //! ```
+//!
+//! Tests currently require `--test-threads=1`. Running fully parallel
+//! occasionally surfaces a race in `rbw-agent` startup (child processes
+//! forked across threads sometimes fail to answer the first message on the
+//! IPC socket). The tests themselves are isolated at the filesystem + port
+//! layer; the bug is in the product, not the harness. Fix the race in a
+//! follow-up and drop this restriction.
 //!
 //! By default the harness looks up `vaultwarden` on `$PATH`. Override with
 //! `VAULTWARDEN_BIN=/path/to/vaultwarden` if it lives elsewhere. If the binary

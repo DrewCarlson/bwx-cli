@@ -7,6 +7,27 @@
 
 #![allow(dead_code)] // shared helpers; not every scenario uses everything.
 
+/// Start a `VaultwardenServer` or early-return from the calling test function
+/// with a helpful message. Must be invoked from within a `#[test] fn` that
+/// returns `()`.
+#[macro_export]
+macro_rules! skip_if_no_vaultwarden {
+    () => {
+        match $crate::common::VaultwardenServer::start() {
+            Some(s) => s,
+            None => {
+                eprintln!(
+                    "skipping: vaultwarden binary not found. \
+                     Install with `cargo install --git \
+                     https://github.com/dani-garcia/vaultwarden \
+                     --features sqlite --locked` or set VAULTWARDEN_BIN."
+                );
+                return;
+            }
+        }
+    };
+}
+
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -51,6 +72,7 @@ impl VaultwardenServer {
             .env("SIGNUPS_ALLOWED", "true")
             .env("SIGNUPS_VERIFY", "false")
             .env("DISABLE_ICON_DOWNLOAD", "true")
+            .env("WEB_VAULT_ENABLED", "false")
             // Keep the log volume down unless the caller opted in.
             .env(
                 "ROCKET_LOG_LEVEL",
@@ -170,10 +192,14 @@ impl RbwHarness {
             std::fs::create_dir_all(d).expect("mkdir tempdir child");
         }
 
-        // Write config.json pointing at the ephemeral vaultwarden instance.
-        // rbw's `dirs::profile()` returns "rbw" when `RBW_PROFILE` is unset,
-        // so the config path is `<config_home>/rbw/config.json`.
-        let rbw_cfg_dir = config_home.join("rbw");
+        // `directories::ProjectDirs` honors `XDG_CONFIG_HOME` on Linux but on
+        // macOS always resolves to `$HOME/Library/Application Support/rbw`.
+        // Compute the right path per platform.
+        let rbw_cfg_dir = if cfg!(target_os = "macos") {
+            home.join("Library/Application Support/rbw")
+        } else {
+            config_home.join("rbw")
+        };
         std::fs::create_dir_all(&rbw_cfg_dir).expect("mkdir rbw config dir");
         let cfg = serde_json::json!({
             "email": email,
@@ -275,12 +301,95 @@ impl RbwHarness {
         cmd
     }
 
+    /// Run `rbw <args...>` and return the captured output. Panics on spawn
+    /// failure but always returns `Output` — the caller decides how to handle
+    /// non-zero exit.
+    pub fn run(&self, args: &[&str]) -> std::process::Output {
+        self.cmd()
+            .args(args)
+            .output()
+            .unwrap_or_else(|e| panic!("spawn rbw {args:?}: {e}"))
+    }
+
+    /// Same as `run` but asserts the command exited 0 and returns stdout as
+    /// `String`. Dumps both streams into the panic message on failure.
+    pub fn check(&self, args: &[&str]) -> String {
+        let out = self.run(args);
+        assert!(
+            out.status.success(),
+            "rbw {args:?} failed: status={:?}\nstdout={}\nstderr={}",
+            out.status,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// Run `rbw <args...>` feeding `stdin_data` on standard input.
+    pub fn run_with_stdin(
+        &self,
+        args: &[&str],
+        stdin_data: &[u8],
+    ) -> std::process::Output {
+        use std::io::Write as _;
+
+        let mut child = self
+            .cmd()
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|e| panic!("spawn rbw {args:?}: {e}"));
+        {
+            let mut stdin = child.stdin.take().expect("stdin piped");
+            stdin
+                .write_all(stdin_data)
+                .expect("write to rbw stdin");
+        }
+        child
+            .wait_with_output()
+            .unwrap_or_else(|e| panic!("wait rbw {args:?}: {e}"))
+    }
+
+    /// Log into the server + unlock the vault. Used as the first step of
+    /// almost every scenario.
+    pub fn login_and_unlock(&self) {
+        self.check(&["login"]);
+        self.check(&["unlock"]);
+    }
+
+    /// Convenience: install an `$EDITOR` that rewrites the supplied tempfile
+    /// with `new_contents` exactly, so `rbw edit` / `rbw add` become
+    /// deterministic. The script is written under the harness tempdir and its
+    /// path is returned — callers set it on `cmd()` via `.env("EDITOR", ...)`.
+    pub fn fake_editor(&self, new_contents: &str) -> PathBuf {
+        let path = self.tempdir.path().join("fake-editor.sh");
+        let body = format!(
+            "#!/bin/sh\n\
+             # Overwrite the file rbw passed us with a fixed payload.\n\
+             cat <<'__RBW_E2E_EOF__' > \"$1\"\n{new_contents}\n__RBW_E2E_EOF__\n",
+        );
+        std::fs::write(&path, body).expect("write fake editor");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut p = std::fs::metadata(&path)
+                .expect("stat editor")
+                .permissions();
+            p.set_mode(0o755);
+            std::fs::set_permissions(&path, p).expect("chmod editor");
+        }
+        path
+    }
+
     fn apply_env(&self, cmd: &mut Command) {
         cmd.env("XDG_CONFIG_HOME", &self.config_home)
             .env("XDG_CACHE_HOME", &self.cache_home)
             .env("XDG_DATA_HOME", &self.data_home)
             .env("XDG_RUNTIME_DIR", &self.runtime_dir)
             .env("HOME", &self.home)
+            .env("RBW_AGENT", env!("CARGO_BIN_EXE_rbw-agent"))
             // Keep tests non-interactive and deterministic.
             .env_remove("RBW_PROFILE")
             .env_remove("DISPLAY")

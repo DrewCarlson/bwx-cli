@@ -75,3 +75,33 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: RUSTDOCFLAGS="-Dwarnings" cargo doc --all-features
       - run: cargo test --doc --all-features
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: e2e-${{ matrix.os }}
+      - name: Cache vaultwarden binary
+        id: vw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/vaultwarden
+          # Bump this key to force a rebuild against a newer vaultwarden.
+          key: vaultwarden-bin-${{ runner.os }}-2025-10
+      - name: Install vaultwarden
+        if: steps.vw-cache.outputs.cache-hit != 'true'
+        run: |
+          cargo install --git https://github.com/dani-garcia/vaultwarden \
+            --features sqlite --locked
+      - name: Run e2e suite
+        env:
+          RUST_BACKTRACE: 1
+        run: |
+          export VAULTWARDEN_BIN="$HOME/.cargo/bin/vaultwarden"
+          cargo test --test e2e -- --ignored --test-threads=1 --nocapture
