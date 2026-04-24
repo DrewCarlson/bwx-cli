@@ -1,4 +1,7 @@
 use rand::seq::IteratorRandom as _;
+use zeroize::Zeroize as _;
+
+use crate::locked;
 
 const SYMBOLS: &[u8] = b"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 const NUMBERS: &[u8] = b"0123456789";
@@ -15,7 +18,15 @@ pub enum Type {
     Diceware,
 }
 
-pub fn pwgen(ty: Type, len: usize) -> String {
+/// Generate a password into a `locked::Password`.
+///
+/// The result is mlocked + zeroized on drop, so the caller-facing copy
+/// never sits in ordinary heap memory. Note that any downstream code
+/// that clones the value into a plain `String` (e.g. the rmpv-encoded
+/// `Action::Encrypt` payload sent over the agent socket) reintroduces
+/// that exposure — this function only eliminates it in the immediate
+/// caller's scope.
+pub fn pwgen(ty: Type, len: usize) -> locked::Password {
     let mut rng = rand::rng();
 
     let alphabet = match ty {
@@ -47,23 +58,27 @@ pub fn pwgen(ty: Type, len: usize) -> String {
         }
     };
 
-    let mut pass = vec![];
-    pass.extend(
-        std::iter::repeat_with(|| alphabet.iter().choose(&mut rng).unwrap())
+    let mut buf = locked::Vec::new();
+    buf.extend(
+        std::iter::repeat_with(|| *alphabet.iter().choose(&mut rng).unwrap())
             .take(len),
     );
-    // unwrap is safe because the method of generating passwords guarantees
-    // valid utf8
-    String::from_utf8(pass).unwrap()
+    locked::Password::new(buf)
 }
 
-fn diceware(rng: &mut impl rand::RngCore, len: usize) -> String {
+fn diceware(rng: &mut impl rand::RngCore, len: usize) -> locked::Password {
     let mut words = vec![];
     for _ in 0..len {
         // unwrap is safe because choose only returns None for an empty slice
         words.push(*crate::wordlist::EFF_LONG.iter().choose(rng).unwrap());
     }
-    words.join(" ")
+    let mut joined = words.join(" ");
+    let mut buf = locked::Vec::new();
+    buf.extend(joined.as_bytes().iter().copied());
+    // The intermediate `String` held the full passphrase in plain heap;
+    // scrub it before it drops.
+    joined.zeroize();
+    locked::Password::new(buf)
 }
 
 #[cfg(test)]
@@ -73,30 +88,31 @@ mod test {
     #[test]
     fn test_pwgen() {
         let pw = pwgen(Type::AllChars, 50);
-        assert_eq!(pw.len(), 50);
+        assert_eq!(pw.password().len(), 50);
         // technically this could fail, but the chances are incredibly low
         // (around 0.000009%)
-        assert_duplicates(&pw);
+        assert_duplicates(pw.password());
 
         let pw = pwgen(Type::AllChars, 100);
-        assert_eq!(pw.len(), 100);
-        assert_duplicates(&pw);
+        assert_eq!(pw.password().len(), 100);
+        assert_duplicates(pw.password());
 
         let pw = pwgen(Type::NoSymbols, 100);
-        assert_eq!(pw.len(), 100);
-        assert_duplicates(&pw);
+        assert_eq!(pw.password().len(), 100);
+        assert_duplicates(pw.password());
 
         let pw = pwgen(Type::Numbers, 100);
-        assert_eq!(pw.len(), 100);
-        assert_duplicates(&pw);
+        assert_eq!(pw.password().len(), 100);
+        assert_duplicates(pw.password());
 
         let pw = pwgen(Type::NonConfusables, 100);
-        assert_eq!(pw.len(), 100);
-        assert_duplicates(&pw);
+        assert_eq!(pw.password().len(), 100);
+        assert_duplicates(pw.password());
     }
 
     #[track_caller]
-    fn assert_duplicates(s: &str) {
+    fn assert_duplicates(bytes: &[u8]) {
+        let s = std::str::from_utf8(bytes).unwrap();
         let mut set = std::collections::HashSet::new();
         for c in s.chars() {
             set.insert(c);

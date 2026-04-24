@@ -1179,7 +1179,16 @@ pub async fn touchid_enroll(
 
     // If a prior enrollment exists, remove it first — we're rotating.
     if let Ok(existing) = rbw::touchid::blob::Blob::load() {
-        let _ = rbw::touchid::keychain::delete(&existing.keychain_label);
+        if let Err(e) =
+            rbw::touchid::keychain::delete(&existing.keychain_label)
+        {
+            log::warn!(
+                "touchid: failed to delete previous Keychain item \
+                 {label}: {e} (enrollment will continue; the old item \
+                 is now orphaned)",
+                label = existing.keychain_label,
+            );
+        }
     }
     rbw::touchid::keychain::store(&label, seed.data())
         .map_err(|e| bin_error::Error::msg(e.to_string()))?;
@@ -1211,7 +1220,15 @@ pub async fn touchid_disable(
 ) -> bin_error::Result<()> {
     #[cfg(target_os = "macos")]
     if let Ok(blob) = rbw::touchid::blob::Blob::load() {
-        let _ = rbw::touchid::keychain::delete(&blob.keychain_label);
+        if let Err(e) = rbw::touchid::keychain::delete(&blob.keychain_label) {
+            log::warn!(
+                "touchid: failed to delete Keychain item {label}: {e} \
+                 (blob will still be removed; Keychain item may be \
+                 orphaned — clear manually in Keychain Access if \
+                 desired)",
+                label = blob.keychain_label,
+            );
+        }
     }
     rbw::touchid::blob::Blob::remove().context("remove touchid blob")?;
     respond_ack(sock).await?;

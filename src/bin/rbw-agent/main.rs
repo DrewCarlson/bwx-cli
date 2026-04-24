@@ -57,9 +57,46 @@ async fn tokio_main(
 
     let ssh_agent = crate::ssh_agent::SshAgent::new(state.clone());
 
-    tokio::try_join!(agent.run(listener), ssh_agent.run())?;
+    // Install a best-effort SIGTERM/SIGINT handler so keys in
+    // `State` are zeroized (via `Drop` on `locked::Vec`) before the
+    // process exits, rather than living in kernel buffers until the
+    // reaper gets around to reclaiming pages.
+    let shutdown_state = state.clone();
+    tokio::select! {
+        res = async { tokio::try_join!(agent.run(listener), ssh_agent.run()) } => {
+            res?;
+        }
+        () = shutdown_signal() => {
+            log::info!("rbw-agent: shutdown signal received; clearing state");
+            shutdown_state.lock().await.clear();
+        }
+    }
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut term = match signal(SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("could not install SIGTERM handler: {e}");
+                // Fall back to only SIGINT.
+                let _ = tokio::signal::ctrl_c().await;
+                return;
+            }
+        };
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = tokio::signal::ctrl_c() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 fn real_main() -> bin_error::Result<()> {

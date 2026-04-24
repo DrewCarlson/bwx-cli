@@ -66,6 +66,7 @@ tokio = { version = "1.48.0", features = [
     "time",
     "io-util",
     "process",
+    "signal",
 ] }
 url = "2.5.7"
 urlencoding = "2.1.3"

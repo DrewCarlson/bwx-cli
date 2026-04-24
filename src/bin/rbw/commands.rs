@@ -1751,7 +1751,10 @@ pub fn generate(
     ty: rbw::pwgen::Type,
 ) -> bin_error::Result<()> {
     let password = rbw::pwgen::pwgen(ty, len);
-    println!("{password}");
+    // pwgen guarantees valid UTF-8 (ASCII alphabet + space-joined
+    // diceware words), so this unwrap can't fail.
+    let password_str = std::str::from_utf8(password.password()).unwrap();
+    println!("{password_str}");
 
     if let Some(name) = name {
         unlock()?;
@@ -1766,7 +1769,7 @@ pub fn generate(
         let username = username
             .map(|username| crate::actions::encrypt(username, None))
             .transpose()?;
-        let password = crate::actions::encrypt(&password, None)?;
+        let password = crate::actions::encrypt(password_str, None)?;
         let uris: Vec<_> = uris
             .iter()
             .map(|uri| {
