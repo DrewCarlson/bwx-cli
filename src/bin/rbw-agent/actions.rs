@@ -167,16 +167,14 @@ pub async fn login(
             } else {
                 None
             };
-            let password = rbw::pinentry::getpin(
-                &config_pinentry().await?,
-                "Master Password",
-                &format!("Log in to {host}"),
-                err.as_deref(),
+            let password = prompt_master_password(
+                "Log in to rbw",
+                &format!("Enter your Bitwarden master password for {host}"),
                 environment,
-                true,
+                err.as_deref(),
             )
             .await
-            .context("failed to read password from pinentry")?;
+            .context("failed to read master password")?;
             match rbw::actions::login(&email, password.clone(), None, None)
                 .await
             {
@@ -311,16 +309,15 @@ async fn two_factor(
         } else {
             None
         };
-        let code = rbw::pinentry::getpin(
-            &config_pinentry().await?,
+        let code = prompt_two_factor_code(
             provider.header(),
             provider.message(),
-            err.as_deref(),
-            environment,
             provider.grab(),
+            environment,
+            err.as_deref(),
         )
         .await
-        .context("failed to read code from pinentry")?;
+        .context("failed to read 2FA code")?;
         let code = std::str::from_utf8(code.password())
             .context("code was not valid utf8")?;
         match rbw::actions::login(
@@ -435,30 +432,35 @@ async fn login_success(
     Ok(())
 }
 
-/// Prompt the user for the master password at unlock time. On macOS
-/// this defaults to a native `CFUserNotification` modal (works without
-/// a terminal — ideal for ssh-sign / GUI-triggered unlocks); user can
-/// set `macos_unlock_dialog = false` to force pinentry. On other
-/// platforms this always goes through pinentry.
-async fn prompt_unlock_password(
+/// Prompt the user for the master password. On macOS this defaults to
+/// a native secure dialog (works without a terminal — ideal for
+/// ssh-sign / GUI-triggered unlocks, and the only option when pinentry
+/// isn't installed); user can set `macos_unlock_dialog = false` to
+/// force pinentry. On other platforms this always goes through
+/// pinentry.
+///
+/// `title` is the dialog/pinentry header. `pinentry_desc` is what
+/// pinentry shows beneath it; the native dialog uses a longer auto-
+/// generated body that embeds the error context for retries.
+async fn prompt_master_password(
+    title: &str,
+    pinentry_desc: &str,
     environment: &rbw::protocol::Environment,
     err: Option<&str>,
 ) -> bin_error::Result<rbw::locked::Password> {
-    let profile = rbw::dirs::profile();
-    let title = "Unlock rbw vault";
     let use_native = cfg!(target_os = "macos")
         && rbw::config::Config::load_async()
             .await
             .map_or(cfg!(target_os = "macos"), |c| c.macos_unlock_dialog);
 
     let message = err.map_or_else(
-        || format!("Enter master password for '{profile}'"),
-        |e| format!("{e} — enter master password for '{profile}'"),
+        || pinentry_desc.to_string(),
+        |e| format!("{e} — {pinentry_desc}"),
     );
 
     if use_native {
         let title = title.to_string();
-        // CFUserNotification is synchronous / blocking; run on a
+        // osascript display dialog is synchronous / blocking; run on a
         // blocking thread so we don't stall the tokio runtime.
         match tokio::task::spawn_blocking(move || {
             rbw::pinentry_native::prompt_master_password(&title, &message)
@@ -477,14 +479,75 @@ async fn prompt_unlock_password(
     let pinentry = config_pinentry().await?;
     rbw::pinentry::getpin(
         &pinentry,
-        "Master Password",
-        &format!("Unlock the local database for '{profile}'"),
+        title,
+        pinentry_desc,
         err,
         environment,
         true,
     )
     .await
     .context("failed to read password from pinentry")
+}
+
+/// Prompt for a 2FA code. Goes through the native macOS dialog in
+/// visible-text mode (codes aren't secrets worth masking and the
+/// Yubikey/TOTP codes are short enough that users want to see them).
+/// Falls back to pinentry on non-macOS or when `macos_unlock_dialog`
+/// is off.
+async fn prompt_two_factor_code(
+    title: &str,
+    message: &str,
+    grab: bool,
+    environment: &rbw::protocol::Environment,
+    err: Option<&str>,
+) -> bin_error::Result<rbw::locked::Password> {
+    let use_native = cfg!(target_os = "macos")
+        && rbw::config::Config::load_async()
+            .await
+            .map_or(cfg!(target_os = "macos"), |c| c.macos_unlock_dialog);
+
+    if use_native {
+        let body = err.map_or_else(
+            || message.to_string(),
+            |e| format!("{e} — {message}"),
+        );
+        let title = title.to_string();
+        match tokio::task::spawn_blocking(move || {
+            rbw::pinentry_native::prompt(
+                &title,
+                &body,
+                "Submit",
+                rbw::pinentry_native::InputKind::Secret,
+            )
+        })
+        .await
+        .map_err(|e| bin_error::Error::msg(format!("join: {e}")))?
+        {
+            Ok(code) => return Ok(code),
+            Err(rbw::error::Error::NativePromptUnsupported) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    let pinentry = config_pinentry().await?;
+    rbw::pinentry::getpin(&pinentry, title, message, err, environment, grab)
+        .await
+        .context("failed to read code from pinentry")
+}
+
+/// Convenience wrapper for the unlock path.
+async fn prompt_unlock_password(
+    environment: &rbw::protocol::Environment,
+    err: Option<&str>,
+) -> bin_error::Result<rbw::locked::Password> {
+    let profile = rbw::dirs::profile();
+    prompt_master_password(
+        "Unlock rbw vault",
+        &format!("Unlock the local database for '{profile}'"),
+        environment,
+        err,
+    )
+    .await
 }
 
 async fn unlock_state(
@@ -886,16 +949,14 @@ async fn decrypt_cipher(
             } else {
                 None
             };
-            let password = rbw::pinentry::getpin(
-                &config_pinentry().await?,
+            let password = prompt_master_password(
                 "Master Password",
                 "Accessing this entry requires the master password",
-                err.as_deref(),
                 environment,
-                true,
+                err.as_deref(),
             )
             .await
-            .context("failed to read password from pinentry")?;
+            .context("failed to read master password")?;
             match rbw::actions::unlock(
                 &email,
                 &password,
