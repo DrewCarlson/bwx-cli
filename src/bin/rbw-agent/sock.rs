@@ -76,18 +76,8 @@ pub fn check_peer_uid(
 ) -> bin_error::Result<()> {
     use std::os::unix::io::AsRawFd as _;
     let fd = stream.as_raw_fd();
-    let mut peer_uid: libc::uid_t = u32::MAX;
-    let mut peer_gid: libc::gid_t = u32::MAX;
-    // SAFETY: we own a valid UnixStream fd for the duration of this
-    // call; getpeereid writes only to the two out-params we just
-    // stack-allocated.
-    let rc =
-        unsafe { libc::getpeereid(fd, &raw mut peer_uid, &raw mut peer_gid) };
-    if rc != 0 {
-        return Err(bin_error::Error::from(std::io::Error::last_os_error()))
-            .context("failed to read peer uid");
-    }
-    // SAFETY: getuid can't fail.
+    let peer_uid = peer_uid(fd).context("failed to read peer uid")?;
+    // SAFETY: getuid is infallible.
     let self_uid = unsafe { libc::getuid() };
     if peer_uid != self_uid {
         return Err(bin_error::Error::msg(format!(
@@ -96,6 +86,53 @@ pub fn check_peer_uid(
         )));
     }
     Ok(())
+}
+
+/// Read the uid of the process connected on the other end of a Unix
+/// socket fd. `SO_PEERCRED` is the Linux idiom (glibc's `getpeereid`
+/// wraps it, but musl omits the wrapper and the libc crate follows
+/// suit, so we call it directly). `getpeereid` is the BSD / macOS
+/// idiom.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn peer_uid(fd: std::os::unix::io::RawFd) -> std::io::Result<u32> {
+    let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut len = u32::try_from(std::mem::size_of::<libc::ucred>())
+        .expect("ucred size fits in socklen_t");
+    // SAFETY: `fd` is a valid Unix-socket fd owned by the caller;
+    // `cred` and `len` are stack-local outs of the correct types.
+    let rc = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            std::ptr::from_mut::<libc::ucred>(&mut cred).cast(),
+            &raw mut len,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(cred.uid)
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+fn peer_uid(fd: std::os::unix::io::RawFd) -> std::io::Result<u32> {
+    let mut uid: libc::uid_t = u32::MAX;
+    let mut gid: libc::gid_t = u32::MAX;
+    // SAFETY: `fd` is a valid Unix-socket fd owned by the caller;
+    // getpeereid writes only to the two u32 out-params.
+    let rc = unsafe { libc::getpeereid(fd, &raw mut uid, &raw mut gid) };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(uid)
 }
 
 pub fn listen() -> bin_error::Result<tokio::net::UnixListener> {
