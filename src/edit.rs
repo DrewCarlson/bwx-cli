@@ -2,10 +2,8 @@ use crate::prelude::*;
 
 use std::io::{Read as _, Write as _};
 
-use is_terminal::IsTerminal as _;
-
 pub fn edit(contents: &str, help: &str) -> Result<String> {
-    if !std::io::stdin().is_terminal() {
+    if !rustix::termios::isatty(std::io::stdin()) {
         // directly read from piped content
         return match std::io::read_to_string(std::io::stdin()) {
             Err(e) => Err(Error::FailedToReadFromStdin { err: e }),

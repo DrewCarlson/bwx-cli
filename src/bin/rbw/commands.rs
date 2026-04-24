@@ -6,6 +6,32 @@ use anyhow::Context as _;
 // code lasts for before a new one must be generated
 const TOTP_DEFAULT_STEP: u64 = 30;
 
+fn format_rfc3339(t: std::time::SystemTime) -> String {
+    let dur = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = dur.as_secs();
+    let nanos = dur.subsec_nanos();
+    let days = (secs / 86400) as i64;
+    let rem = secs % 86400;
+    let (h, r) = (rem / 3600, rem % 3600);
+    let (m, s) = (r / 60, r % 60);
+    // Howard Hinnant's civil_from_days, 0000-03-01 anchored
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y0 = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m_civ = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m_civ <= 2 { y0 + 1 } else { y0 };
+    format!(
+        "{y:04}-{m_civ:02}-{d:02}T{h:02}:{m:02}:{s:02}.{nanos:09}Z"
+    )
+}
+
 const MISSING_CONFIG_HELP: &str =
     "Before using rbw, you must configure the email address you would like to \
     use to log in to the server by running:\n\n    \
@@ -1809,11 +1835,8 @@ pub fn edit(
 
             if let Some(prev_password) = entry_password.clone() {
                 let new_history_entry = rbw::db::HistoryEntry {
-                    last_used_date: format!(
-                        "{}",
-                        humantime::format_rfc3339(
-                            std::time::SystemTime::now()
-                        )
+                    last_used_date: format_rfc3339(
+                        std::time::SystemTime::now(),
                     ),
                     password: prev_password,
                 };

@@ -274,8 +274,6 @@ enum CompletionShell {
     Fish,
     Powershell,
     Elvish,
-    Nushell,
-    Fig,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -314,14 +312,7 @@ fn main() {
         env_logger::Env::default().default_filter_or("info"),
     )
     .format(|buf, record| {
-        if let Some((terminal_size::Width(w), _)) =
-            terminal_size::terminal_size()
-        {
-            let out = format!("{}: {}", record.level(), record.args());
-            writeln!(buf, "{}", textwrap::fill(&out, usize::from(w) - 1))
-        } else {
-            writeln!(buf, "{}: {}", record.level(), record.args())
-        }
+        writeln!(buf, "{}: {}", record.level(), record.args())
     })
     .init();
 
@@ -491,22 +482,6 @@ fn main() {
                 CompletionShell::Elvish => {
                     clap_complete::generate(
                         clap_complete::Shell::Elvish,
-                        &mut Opt::command(),
-                        "rbw",
-                        &mut std::io::stdout(),
-                    );
-                }
-                CompletionShell::Nushell => {
-                    clap_complete::generate(
-                        clap_complete_nushell::Nushell,
-                        &mut Opt::command(),
-                        "rbw",
-                        &mut std::io::stdout(),
-                    );
-                }
-                CompletionShell::Fig => {
-                    clap_complete::generate(
-                        clap_complete_fig::Fig,
                         &mut Opt::command(),
                         "rbw",
                         &mut std::io::stdout(),

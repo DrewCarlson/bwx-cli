@@ -8,7 +8,7 @@ pub enum Message {
 
 pub struct Handler {
     write: Option<
-        futures::stream::SplitSink<
+        futures_util::stream::SplitSink<
             tokio_tungstenite::WebSocketStream<
                 tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
             >,
