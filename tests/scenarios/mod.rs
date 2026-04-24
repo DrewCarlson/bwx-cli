@@ -1,7 +1,16 @@
 pub mod add_list_get;
+pub mod agent_lifecycle;
 pub mod config;
 pub mod edit_remove;
+pub mod folders;
 pub mod generate_and_sync;
+pub mod get_field;
+pub mod history;
 pub mod lock_cycle;
 pub mod multiple_entries;
+pub mod profile_isolation;
+pub mod purge_and_sync;
+pub mod raw_output;
 pub mod smoke;
+pub mod uri_matching;
+pub mod wrong_password;
