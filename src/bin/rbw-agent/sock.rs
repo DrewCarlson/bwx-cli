@@ -203,6 +203,30 @@ pub fn listen() -> bin_error::Result<tokio::net::UnixListener> {
 pub fn bind_atomic(
     path: &std::path::Path,
 ) -> std::io::Result<tokio::net::UnixListener> {
+    // Try the atomic path. If it fails for *any* reason — including
+    // Darwin's ~104-byte `sockaddr_un.sun_path` limit once the tmp
+    // suffix is appended — fall back to the legacy unlink-then-bind
+    // approach so the agent still starts. The fallback has a tiny
+    // same-user TOCTOU window, which is blocked in practice by our
+    // 0o700 runtime dir, but we log it so it's observable.
+    match bind_atomic_inner(path) {
+        Ok(l) => Ok(l),
+        Err(e) => {
+            log::warn!(
+                "bind_atomic failed ({e}); falling back to unlink-then-bind \
+                 on {}. TOCTOU mitigation partially degraded; socket is \
+                 still protected by its 0o700 parent dir.",
+                path.display()
+            );
+            let _ = std::fs::remove_file(path);
+            tokio::net::UnixListener::bind(path)
+        }
+    }
+}
+
+fn bind_atomic_inner(
+    path: &std::path::Path,
+) -> std::io::Result<tokio::net::UnixListener> {
     use rand::RngCore as _;
     use std::fmt::Write as _;
 
@@ -212,25 +236,18 @@ pub fn bind_atomic(
             "socket path has no parent directory",
         )
     })?;
-    let file_name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "socket path has no file name",
-        )
-    })?;
-    let mut nonce = [0u8; 8];
+    // Minimal tmp name: 4 random bytes of hex with a tiny prefix. Keeps
+    // the total tmp path length under Darwin's 104-byte `sun_path`
+    // limit in almost all layouts. The filename itself doesn't need to
+    // resemble the target — we rename(2) over the target below.
+    let mut nonce = [0u8; 4];
     rand::rng().fill_bytes(&mut nonce);
-    let mut nonce_hex = String::with_capacity(nonce.len() * 2);
+    let mut nonce_hex = String::with_capacity(nonce.len() * 2 + 2);
+    nonce_hex.push_str(".t");
     for b in &nonce {
         write!(&mut nonce_hex, "{b:02x}").unwrap();
     }
-    let tmp_name = format!(
-        "{}.{}.{}.tmp",
-        file_name.to_string_lossy(),
-        std::process::id(),
-        nonce_hex,
-    );
-    let tmp = parent.join(tmp_name);
+    let tmp = parent.join(nonce_hex);
 
     // Best-effort cleanup of our own tmp name in case a prior crashed
     // agent left one behind. The nonce makes a collision vanishingly
