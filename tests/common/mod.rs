@@ -571,6 +571,155 @@ fn base64_encode(b: &[u8]) -> String {
     STANDARD.encode(b)
 }
 
+fn base64_encode_url_safe_no_pad(b: &[u8]) -> String {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+    URL_SAFE_NO_PAD.encode(b)
+}
+
+// ---------------------------------------------------------------------------
+// Authenticated API helper — for tests that need to create entries the way
+// "another client" would (outside of the rbw binary under test), most
+// commonly to populate a field like `totp` that rbw's CLI can't set.
+// ---------------------------------------------------------------------------
+
+pub struct Account {
+    pub access_token: String,
+    pub vault_keys: locked::Keys,
+}
+
+/// Authenticate against vaultwarden's /identity/connect/token password flow.
+/// Mirrors what rbw's own login does, but runs in-process so tests can POST
+/// ciphers directly to the server.
+pub fn authenticate(
+    server: &VaultwardenServer,
+    email: &str,
+    password: &str,
+) -> Result<Account, String> {
+    let mut pw_vec = locked::Vec::new();
+    pw_vec.extend(password.as_bytes().iter().copied());
+    let locked_pw = locked::Password::new(pw_vec);
+
+    let identity = Identity::new(
+        email,
+        &locked_pw,
+        rbw::api::KdfType::Pbkdf2,
+        KDF_ITERATIONS,
+        None,
+        None,
+    )
+    .map_err(|e| format!("derive identity: {e}"))?;
+
+    let form = [
+        ("grant_type", "password"),
+        ("scope", "api offline_access"),
+        ("client_id", "cli"),
+        ("deviceType", "8"),
+        ("deviceIdentifier", "00000000-0000-0000-0000-000000000001"),
+        ("deviceName", "rbw-e2e"),
+        ("devicePushToken", ""),
+        ("username", email),
+        (
+            "password",
+            &base64_encode(identity.master_password_hash.hash()),
+        ),
+    ];
+
+    let url = format!("{}/identity/connect/token", server.base_url);
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .post(&url)
+        .header(
+            "auth-email",
+            base64_encode_url_safe_no_pad(email.as_bytes()),
+        )
+        .form(&form)
+        .send()
+        .map_err(|e| format!("POST token: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().unwrap_or_default();
+        return Err(format!("token failed: {status} body={text}"));
+    }
+    let body: serde_json::Value =
+        resp.json().map_err(|e| format!("token json: {e}"))?;
+    let access_token = body
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("no access_token in response: {body}"))?
+        .to_string();
+    let protected_key = body
+        .get("Key")
+        .or_else(|| body.get("key"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("no key in response: {body}"))?;
+
+    let wrapped = CipherString::new(protected_key)
+        .map_err(|e| format!("parse key: {e}"))?;
+    let vault_vec = wrapped
+        .decrypt_locked_symmetric(&identity.keys)
+        .map_err(|e| format!("unwrap vault key: {e}"))?;
+    let vault_keys = locked::Keys::new(vault_vec);
+
+    Ok(Account {
+        access_token,
+        vault_keys,
+    })
+}
+
+/// Upload a Login cipher with the supplied plaintext fields. Everything
+/// listed on the cipher is encrypted client-side with the account's vault
+/// key first; vaultwarden never sees plaintext.
+pub fn upload_login_cipher(
+    server: &VaultwardenServer,
+    account: &Account,
+    name: &str,
+    totp: Option<&str>,
+    username: Option<&str>,
+    password_value: Option<&str>,
+) -> Result<(), String> {
+    let encrypt = |s: &str| -> Result<String, String> {
+        CipherString::encrypt_symmetric(&account.vault_keys, s.as_bytes())
+            .map(|c| c.to_string())
+            .map_err(|e| format!("encrypt field: {e}"))
+    };
+
+    let enc_name = encrypt(name)?;
+    let enc_totp = totp.map(encrypt).transpose()?;
+    let enc_user = username.map(encrypt).transpose()?;
+    let enc_password = password_value.map(encrypt).transpose()?;
+
+    let body = serde_json::json!({
+        "type": 1,
+        "name": enc_name,
+        "notes": null,
+        "favorite": false,
+        "folderId": null,
+        "organizationId": null,
+        "login": {
+            "username": enc_user,
+            "password": enc_password,
+            "totp": enc_totp,
+            "uris": null,
+        },
+    });
+
+    let url = format!("{}/api/ciphers", server.base_url);
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .post(&url)
+        .bearer_auth(&account.access_token)
+        .json(&body)
+        .send()
+        .map_err(|e| format!("POST cipher: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().unwrap_or_default();
+        return Err(format!("cipher upload failed: {status} body={text}"));
+    }
+    Ok(())
+}
+
 // Make sure shell_escape doesn't bit-rot if the harness ever stops using it.
 #[cfg(test)]
 mod unit {
