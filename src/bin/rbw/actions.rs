@@ -157,6 +157,7 @@ pub fn clipboard_store(text: &str) -> bin_error::Result<()> {
     })
 }
 
+#[cfg(target_os = "macos")]
 pub fn touchid_enroll() -> bin_error::Result<()> {
     simple_action(rbw::protocol::Action::TouchIdEnroll)
 }

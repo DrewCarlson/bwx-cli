@@ -671,6 +671,7 @@ async fn unlock_success(
 /// password instead of just seeing a Touch ID dialog.
 #[derive(Debug)]
 enum TouchIdUnlockOutcome {
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Unlocked,
     Fallback(&'static str),
 }
@@ -796,6 +797,7 @@ async fn try_unlock_via_touchid(
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(clippy::unused_async)]
 async fn try_unlock_via_touchid(
     _state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
 ) -> TouchIdUnlockOutcome {
@@ -1190,6 +1192,7 @@ pub async fn touchid_enroll(
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(clippy::unused_async)]
 pub async fn touchid_enroll(
     _sock: &mut crate::sock::Sock,
     _state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,

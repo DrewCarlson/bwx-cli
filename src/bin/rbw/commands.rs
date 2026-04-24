@@ -2063,24 +2063,21 @@ pub fn ssh_socket() {
     println!("{}", rbw::dirs::ssh_agent_socket_file().display());
 }
 
+#[cfg(not(target_os = "macos"))]
 pub fn touchid_enroll() -> bin_error::Result<()> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        return Err(bin_error::Error::msg(
-            "touchid is only supported on macOS",
-        ));
-    }
-    #[cfg(target_os = "macos")]
-    {
-        unlock()?;
-        crate::actions::touchid_enroll()?;
-        println!(
-            "Touch ID enrollment active. Set `touchid_gate` to \
-             'signing' or 'all' to require a Touch ID prompt on \
-             sensitive operations."
-        );
-        Ok(())
-    }
+    Err(bin_error::Error::msg("touchid is only supported on macOS"))
+}
+
+#[cfg(target_os = "macos")]
+pub fn touchid_enroll() -> bin_error::Result<()> {
+    unlock()?;
+    crate::actions::touchid_enroll()?;
+    println!(
+        "Touch ID enrollment active. Set `touchid_gate` to \
+         'signing' or 'all' to require a Touch ID prompt on \
+         sensitive operations."
+    );
+    Ok(())
 }
 
 pub fn touchid_disable() -> bin_error::Result<()> {
@@ -2111,31 +2108,28 @@ const LAUNCHAGENT_LABEL: &str = "net.tozt.rbw.ssh-auth-sock";
 #[cfg(target_os = "macos")]
 const AGENT_LAUNCHAGENT_LABEL: &str = "net.tozt.rbw.agent";
 
-pub fn setup_macos(force: bool) -> bin_error::Result<()> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = force;
-        return Err(bin_error::Error::msg(
-            "setup-macos is only supported on macOS",
-        ));
-    }
-    #[cfg(target_os = "macos")]
-    {
-        do_setup_macos(force)
-    }
+#[cfg(not(target_os = "macos"))]
+pub fn setup_macos(_force: bool) -> bin_error::Result<()> {
+    Err(bin_error::Error::msg(
+        "setup-macos is only supported on macOS",
+    ))
 }
 
+#[cfg(target_os = "macos")]
+pub fn setup_macos(force: bool) -> bin_error::Result<()> {
+    do_setup_macos(force)
+}
+
+#[cfg(not(target_os = "macos"))]
 pub fn teardown_macos() -> bin_error::Result<()> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        return Err(bin_error::Error::msg(
-            "teardown-macos is only supported on macOS",
-        ));
-    }
-    #[cfg(target_os = "macos")]
-    {
-        do_teardown_macos()
-    }
+    Err(bin_error::Error::msg(
+        "teardown-macos is only supported on macOS",
+    ))
+}
+
+#[cfg(target_os = "macos")]
+pub fn teardown_macos() -> bin_error::Result<()> {
+    do_teardown_macos()
 }
 
 #[cfg(target_os = "macos")]
