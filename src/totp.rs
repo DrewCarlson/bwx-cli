@@ -55,35 +55,33 @@ pub fn generate(
         msg: msg.to_string(),
     };
     let counter = (unix_secs / step).to_be_bytes();
-    let mac: Vec<u8> = match algorithm {
-        Algorithm::Sha1 | Algorithm::Steam => {
-            let mut m = Hmac::<sha1::Sha1>::new_from_slice(secret).map_err(
-                |e| crate::error::Error::Totp {
-                    msg: format!("invalid hmac key: {e}"),
-                },
-            )?;
-            m.update(&counter);
-            m.finalize().into_bytes().to_vec()
-        }
-        Algorithm::Sha256 => {
-            let mut m = Hmac::<sha2::Sha256>::new_from_slice(secret).map_err(
-                |e| crate::error::Error::Totp {
-                    msg: format!("invalid hmac key: {e}"),
-                },
-            )?;
-            m.update(&counter);
-            m.finalize().into_bytes().to_vec()
-        }
-        Algorithm::Sha512 => {
-            let mut m = Hmac::<sha2::Sha512>::new_from_slice(secret).map_err(
-                |e| crate::error::Error::Totp {
-                    msg: format!("invalid hmac key: {e}"),
-                },
-            )?;
-            m.update(&counter);
-            m.finalize().into_bytes().to_vec()
-        }
-    };
+    let mac: Vec<u8> =
+        match algorithm {
+            Algorithm::Sha1 | Algorithm::Steam => {
+                let mut m = Hmac::<sha1::Sha1>::new_from_slice(secret)
+                    .map_err(|e| crate::error::Error::Totp {
+                        msg: format!("invalid hmac key: {e}"),
+                    })?;
+                m.update(&counter);
+                m.finalize().into_bytes().to_vec()
+            }
+            Algorithm::Sha256 => {
+                let mut m = Hmac::<sha2::Sha256>::new_from_slice(secret)
+                    .map_err(|e| crate::error::Error::Totp {
+                        msg: format!("invalid hmac key: {e}"),
+                    })?;
+                m.update(&counter);
+                m.finalize().into_bytes().to_vec()
+            }
+            Algorithm::Sha512 => {
+                let mut m = Hmac::<sha2::Sha512>::new_from_slice(secret)
+                    .map_err(|e| crate::error::Error::Totp {
+                        msg: format!("invalid hmac key: {e}"),
+                    })?;
+                m.update(&counter);
+                m.finalize().into_bytes().to_vec()
+            }
+        };
 
     let offset = usize::from(
         *mac.last().ok_or_else(|| totp_err("empty hmac output"))? & 0x0f,
@@ -182,8 +180,8 @@ mod test {
     #[test]
     fn test_steam() {
         let secret = decode_base32("STEAMKEY234567").unwrap();
-        let code =
-            generate(&secret, 1_000_000_000, 30, 5, &Algorithm::Steam).unwrap();
+        let code = generate(&secret, 1_000_000_000, 30, 5, &Algorithm::Steam)
+            .unwrap();
         assert_eq!(code.len(), 5);
         for c in code.chars() {
             assert!(STEAM_CHARS.contains(&(c as u8)));

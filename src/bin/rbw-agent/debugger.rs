@@ -40,7 +40,7 @@ pub fn disable_tracing() -> bin_error::Result<()> {
     };
     // safety: correct argument
     // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/setrlimit.2.html
-    let ret = unsafe { libc::setrlimit(libc::RLIMIT_CORE, &rlim) };
+    let ret = unsafe { libc::setrlimit(libc::RLIMIT_CORE, &raw const rlim) };
     if ret != 0 {
         let e = std::io::Error::last_os_error();
         return Err(bin_error::Error::msg(format!(

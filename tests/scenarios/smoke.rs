@@ -1,19 +1,10 @@
-use crate::common::{register_user, RbwHarness, VaultwardenServer};
+use crate::common::{register_user, RbwHarness};
+use crate::skip_if_no_vaultwarden;
 
 #[test]
 #[ignore = "requires vaultwarden binary; run with --ignored"]
 fn register_login_unlock_list() {
-    let server = match VaultwardenServer::start() {
-        Some(s) => s,
-        None => {
-            eprintln!(
-                "skipping: vaultwarden binary not found. \
-                 Install it or set VAULTWARDEN_BIN. \
-                 See tests/e2e.rs for instructions."
-            );
-            return;
-        }
-    };
+    let server = skip_if_no_vaultwarden!();
 
     let email = "smoke@example.test";
     let password = "correct horse battery staple";
@@ -24,7 +15,11 @@ fn register_login_unlock_list() {
     let harness = RbwHarness::new(&server, email, password);
 
     // `rbw login` — needs the pinentry to answer with the master password.
-    let out = harness.cmd().arg("login").output().expect("spawn rbw login");
+    let out = harness
+        .cmd()
+        .arg("login")
+        .output()
+        .expect("spawn rbw login");
     assert!(
         out.status.success(),
         "rbw login failed: status={:?}\nstdout={}\nstderr={}",
@@ -34,7 +29,11 @@ fn register_login_unlock_list() {
     );
 
     // `rbw unlock` — idempotent after login but we exercise it explicitly.
-    let out = harness.cmd().arg("unlock").output().expect("spawn rbw unlock");
+    let out = harness
+        .cmd()
+        .arg("unlock")
+        .output()
+        .expect("spawn rbw unlock");
     assert!(
         out.status.success(),
         "rbw unlock failed: status={:?}\nstdout={}\nstderr={}",

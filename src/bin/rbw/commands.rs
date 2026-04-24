@@ -6,29 +6,29 @@ use crate::bin_error::{self, ContextExt as _};
 // code lasts for before a new one must be generated
 const TOTP_DEFAULT_STEP: u64 = 30;
 
+#[allow(clippy::many_single_char_names)]
 fn format_rfc3339(t: std::time::SystemTime) -> String {
-    let dur = t
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
+    // Hinnant civil_from_days, restricted to post-1970 (days >= 0) so all
+    // arithmetic stays in u64 and avoids signed/unsigned casts.
+    let dur = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     let secs = dur.as_secs();
     let nanos = dur.subsec_nanos();
-    let days = (secs / 86400) as i64;
-    let rem = secs % 86400;
-    let (h, r) = (rem / 3600, rem % 3600);
-    let (m, s) = (r / 60, r % 60);
-    // Howard Hinnant's civil_from_days, 0000-03-01 anchored
-    let z = days + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y0 = yoe as i64 + era * 400;
+    let days = secs / 86_400;
+    let rem = secs % 86_400;
+    let (hour, r) = (rem / 3600, rem % 3600);
+    let (minute, second) = (r / 60, r % 60);
+    let z = days + 719_468;
+    let era = z / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y0 = yoe + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m_civ = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m_civ <= 2 { y0 + 1 } else { y0 };
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { y0 + 1 } else { y0 };
     format!(
-        "{y:04}-{m_civ:02}-{d:02}T{h:02}:{m:02}:{s:02}.{nanos:09}Z"
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{nanos:09}Z"
     )
 }
 
@@ -1533,8 +1533,7 @@ pub fn search(
         .filter(|entry| {
             entry
                 .as_ref()
-                .map(|entry| entry.search_match(term, folder))
-                .unwrap_or(true)
+                .map_or(true, |entry| entry.search_match(term, folder))
         })
         .map(|entry| entry.map(std::convert::Into::into))
         .collect::<Result<_, crate::bin_error::Error>>()?;
@@ -2320,7 +2319,9 @@ fn decrypt_search_cipher(
     })
 }
 
-fn decrypt_cipher(entry: &rbw::db::Entry) -> bin_error::Result<DecryptedCipher> {
+fn decrypt_cipher(
+    entry: &rbw::db::Entry,
+) -> bin_error::Result<DecryptedCipher> {
     // folder name should always be decrypted with the local key because
     // folders are local to a specific user's vault, not the organization
     let folder = entry
@@ -2673,7 +2674,11 @@ fn parse_editor(contents: &str) -> (Option<String>, Option<String>) {
 fn load_db() -> bin_error::Result<rbw::db::Db> {
     let config = rbw::config::Config::load()?;
     config.email.as_ref().map_or_else(
-        || Err(crate::bin_error::err!("failed to find email address in config")),
+        || {
+            Err(crate::bin_error::err!(
+                "failed to find email address in config"
+            ))
+        },
         |email| {
             rbw::db::Db::load(&config.server_name(), email)
                 .map_err(crate::bin_error::Error::new)
@@ -2684,7 +2689,11 @@ fn load_db() -> bin_error::Result<rbw::db::Db> {
 fn save_db(db: &rbw::db::Db) -> bin_error::Result<()> {
     let config = rbw::config::Config::load()?;
     config.email.as_ref().map_or_else(
-        || Err(crate::bin_error::err!("failed to find email address in config")),
+        || {
+            Err(crate::bin_error::err!(
+                "failed to find email address in config"
+            ))
+        },
         |email| {
             db.save(&config.server_name(), email)
                 .map_err(crate::bin_error::Error::new)
@@ -2695,7 +2704,11 @@ fn save_db(db: &rbw::db::Db) -> bin_error::Result<()> {
 fn remove_db() -> bin_error::Result<()> {
     let config = rbw::config::Config::load()?;
     config.email.as_ref().map_or_else(
-        || Err(crate::bin_error::err!("failed to find email address in config")),
+        || {
+            Err(crate::bin_error::err!(
+                "failed to find email address in config"
+            ))
+        },
         |email| {
             rbw::db::Db::remove(&config.server_name(), email)
                 .map_err(crate::bin_error::Error::new)
@@ -2711,8 +2724,9 @@ struct TotpParams {
 }
 
 fn decode_totp_secret(secret: &str) -> bin_error::Result<Vec<u8>> {
-    rbw::totp::decode_base32(secret)
-        .ok_or_else(|| crate::bin_error::err!("totp secret was not valid base32"))
+    rbw::totp::decode_base32(secret).ok_or_else(|| {
+        crate::bin_error::err!("totp secret was not valid base32")
+    })
 }
 
 fn parse_totp_secret(secret: &str) -> bin_error::Result<TotpParams> {
@@ -2730,7 +2744,9 @@ fn parse_totp_secret(secret: &str) -> bin_error::Result<TotpParams> {
 
                 let secret = decode_totp_secret(
                     query.get("secret").ok_or_else(|| {
-                        crate::bin_error::err!("totp secret url must have secret")
+                        crate::bin_error::err!(
+                            "totp secret url must have secret"
+                        )
                     })?,
                 )?;
                 let algorithm = query.get("algorithm").map_or_else(
@@ -2789,7 +2805,9 @@ fn generate_totp(secret: &str) -> bin_error::Result<String> {
         "SHA512" => rbw::totp::Algorithm::Sha512,
         "STEAM" => rbw::totp::Algorithm::Steam,
         other => {
-            return Err(crate::bin_error::err!("{other} is not a valid totp algorithm"));
+            return Err(crate::bin_error::err!(
+                "{other} is not a valid totp algorithm"
+            ));
         }
     };
     let now = std::time::SystemTime::now()

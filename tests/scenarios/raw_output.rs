@@ -25,8 +25,9 @@ fn list_raw_emits_json() {
         serde_json::from_str(out.trim()).expect("list --raw is not JSON");
     let arr = parsed.as_array().expect("expected a JSON array");
     assert!(
-        arr.iter().any(|e| e.get("name").and_then(|v| v.as_str())
-            == Some("raw.example")),
+        arr.iter()
+            .any(|e| e.get("name").and_then(|v| v.as_str())
+                == Some("raw.example")),
         "raw.example missing from JSON listing: {arr:?}"
     );
 }

@@ -6,6 +6,7 @@
 //! crate (`src/lib.rs`).
 
 #![allow(dead_code)] // shared helpers; not every scenario uses everything.
+#![allow(clippy::items_after_statements)]
 
 /// Start a `VaultwardenServer` or early-return from the calling test function
 /// with a helpful message. Must be invoked from within a `#[test] fn` that
@@ -60,7 +61,8 @@ impl VaultwardenServer {
     /// callers can gracefully skip the test.
     pub fn start() -> Option<Self> {
         let bin = find_vaultwarden()?;
-        let data_dir = tempfile::tempdir().expect("create vaultwarden tempdir");
+        let data_dir =
+            tempfile::tempdir().expect("create vaultwarden tempdir");
         let port = pick_free_port();
         let base_url = format!("http://127.0.0.1:{port}");
 
@@ -82,9 +84,9 @@ impl VaultwardenServer {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
-        let child = cmd
-            .spawn()
-            .unwrap_or_else(|e| panic!("failed to spawn {bin:?}: {e}"));
+        let child = cmd.spawn().unwrap_or_else(|e| {
+            panic!("failed to spawn {}: {e}", bin.display())
+        });
 
         let server = Self {
             base_url,
@@ -173,7 +175,11 @@ pub struct RbwHarness {
 }
 
 impl RbwHarness {
-    pub fn new(server: &VaultwardenServer, email: &str, password: &str) -> Self {
+    pub fn new(
+        server: &VaultwardenServer,
+        email: &str,
+        password: &str,
+    ) -> Self {
         let tempdir = tempfile::tempdir().expect("create rbw tempdir");
         let root = tempdir.path();
 
@@ -182,13 +188,8 @@ impl RbwHarness {
         let data_home = root.join("data");
         let runtime_dir = root.join("run");
         let home = root.join("home");
-        for d in [
-            &config_home,
-            &cache_home,
-            &data_home,
-            &runtime_dir,
-            &home,
-        ] {
+        for d in [&config_home, &cache_home, &data_home, &runtime_dir, &home]
+        {
             std::fs::create_dir_all(d).expect("mkdir tempdir child");
         }
 
@@ -343,7 +344,9 @@ impl RbwHarness {
             let path = data_dir.join(rel);
             match std::fs::read_to_string(&path) {
                 Ok(s) if !s.is_empty() => {
-                    out.push_str(&format!("--- {name} ({}) ---\n", path.display()));
+                    use std::fmt::Write as _;
+                    let _ =
+                        writeln!(out, "--- {name} ({}) ---", path.display());
                     out.push_str(&s);
                     if !s.ends_with('\n') {
                         out.push('\n');
@@ -376,9 +379,7 @@ impl RbwHarness {
             .unwrap_or_else(|e| panic!("spawn rbw {args:?}: {e}"));
         {
             let mut stdin = child.stdin.take().expect("stdin piped");
-            stdin
-                .write_all(stdin_data)
-                .expect("write to rbw stdin");
+            stdin.write_all(stdin_data).expect("write to rbw stdin");
         }
         child
             .wait_with_output()
@@ -407,9 +408,8 @@ impl RbwHarness {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            let mut p = std::fs::metadata(&path)
-                .expect("stat editor")
-                .permissions();
+            let mut p =
+                std::fs::metadata(&path).expect("stat editor").permissions();
             p.set_mode(0o755);
             std::fs::set_permissions(&path, p).expect("chmod editor");
         }

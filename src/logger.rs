@@ -117,10 +117,7 @@ mod tests {
     fn trailing_default() {
         let (d, m) = parse_spec("rbw_agent=trace,warn", LevelFilter::Info);
         assert_eq!(d, LevelFilter::Warn);
-        assert_eq!(
-            m,
-            vec![("rbw_agent".to_string(), LevelFilter::Trace)]
-        );
+        assert_eq!(m, vec![("rbw_agent".to_string(), LevelFilter::Trace)]);
     }
 
     #[test]

@@ -23,9 +23,7 @@ impl SshAgent {
         let listener = tokio::net::UnixListener::bind(socket)?;
         ssh_agent_lib::agent::listen(listener, self)
             .await
-            .map_err(|e| {
-                crate::bin_error::Error::Boxed(Box::new(e))
-            })?;
+            .map_err(|e| crate::bin_error::Error::Boxed(Box::new(e)))?;
 
         Ok(())
     }

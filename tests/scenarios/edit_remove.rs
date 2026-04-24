@@ -23,8 +23,10 @@ fn edit_then_remove() {
     );
 
     // Edit rewrites the entry through stdin using the same parse_editor grammar.
-    let out = harness
-        .run_with_stdin(&["edit", "login.example"], b"newpass\n\nnew notes\n");
+    let out = harness.run_with_stdin(
+        &["edit", "login.example"],
+        b"newpass\n\nnew notes\n",
+    );
     assert!(
         out.status.success(),
         "rbw edit failed: stderr={}",

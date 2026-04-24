@@ -1897,23 +1897,23 @@ fn classify_login_error(error_res: &ConnectErrorRes, code: u16) -> Error {
         "invalid_client" => {
             return Error::IncorrectApiKey;
         }
-        "" => {
+        ""
             // bitwarden_rs returns an empty error and error_description for
             // this case, for some reason
-            if error_desc.is_none() || error_desc == Some("") {
-                if let Some(error_model) = error_res.error_model.as_ref() {
-                    let message = error_model.message.as_str().to_string();
-                    match message.as_str() {
-                        "Username or password is incorrect. Try again"
-                        | "TOTP code is not a number" => {
+            if error_desc.is_none() || error_desc == Some("") =>
+        {
+            if let Some(error_model) = error_res.error_model.as_ref() {
+                let message = error_model.message.as_str().to_string();
+                match message.as_str() {
+                    "Username or password is incorrect. Try again"
+                    | "TOTP code is not a number" => {
+                        return Error::IncorrectPassword { message };
+                    }
+                    s => {
+                        if s.starts_with(
+                            "Invalid TOTP code! Server time: ",
+                        ) {
                             return Error::IncorrectPassword { message };
-                        }
-                        s => {
-                            if s.starts_with(
-                                "Invalid TOTP code! Server time: ",
-                            ) {
-                                return Error::IncorrectPassword { message };
-                            }
                         }
                     }
                 }
@@ -1972,7 +1972,8 @@ mod tests {
             (UriMatchType::RegularExpression, 4),
             (UriMatchType::Never, 5),
         ]);
-        let err = serde_json::from_value::<UriMatchType>(serde_json::json!(99));
+        let err =
+            serde_json::from_value::<UriMatchType>(serde_json::json!(99));
         assert!(err.is_err());
     }
 
@@ -1982,8 +1983,9 @@ mod tests {
             (CipherRepromptType::None, 0),
             (CipherRepromptType::Password, 1),
         ]);
-        let err =
-            serde_json::from_value::<CipherRepromptType>(serde_json::json!(9));
+        let err = serde_json::from_value::<CipherRepromptType>(
+            serde_json::json!(9),
+        );
         assert!(err.is_err());
     }
 

@@ -26,9 +26,11 @@ pub fn unlocked() -> bin_error::Result<()> {
             match res {
                 rbw::protocol::Response::Ack => Ok(()),
                 rbw::protocol::Response::Error { error } => {
-                    Err(bin_error::Error::msg(format!("{error}")))
+                    Err(bin_error::Error::msg(error))
                 }
-                _ => Err(bin_error::Error::msg(format!("unexpected message: {res:?}"))),
+                _ => Err(bin_error::Error::msg(format!(
+                    "unexpected message: {res:?}"
+                ))),
             }
         }
         Err(e) => {
@@ -37,7 +39,7 @@ pub fn unlocked() -> bin_error::Result<()> {
                 std::io::ErrorKind::ConnectionRefused
                     | std::io::ErrorKind::NotFound
             ) {
-                return Err(bin_error::Error::msg(format!("agent not running")));
+                return Err(bin_error::Error::msg("agent not running"));
             }
             Err(e.into())
         }
@@ -61,7 +63,9 @@ pub fn quit() -> bin_error::Result<()> {
             let Some(pid) =
                 rustix::process::Pid::from_raw(pid.trim_end().parse()?)
             else {
-                return Err(bin_error::Error::msg(format!("failed to read pid from pidfile")));
+                return Err(bin_error::Error::msg(
+                    "failed to read pid from pidfile",
+                ));
             };
             sock.send(&rbw::protocol::Request::new(
                 get_environment(),
@@ -101,7 +105,9 @@ pub fn decrypt(
         rbw::protocol::Response::Error { error } => {
             Err(bin_error::Error::msg(format!("failed to decrypt: {error}")))
         }
-        _ => Err(bin_error::Error::msg(format!("unexpected message: {res:?}"))),
+        _ => Err(bin_error::Error::msg(format!(
+            "unexpected message: {res:?}"
+        ))),
     }
 }
 
@@ -124,7 +130,9 @@ pub fn encrypt(
         rbw::protocol::Response::Error { error } => {
             Err(bin_error::Error::msg(format!("failed to encrypt: {error}")))
         }
-        _ => Err(bin_error::Error::msg(format!("unexpected message: {res:?}"))),
+        _ => Err(bin_error::Error::msg(format!(
+            "unexpected message: {res:?}"
+        ))),
     }
 }
 
@@ -144,10 +152,12 @@ pub fn version() -> bin_error::Result<u32> {
     let res = sock.recv()?;
     match res {
         rbw::protocol::Response::Version { version } => Ok(version),
-        rbw::protocol::Response::Error { error } => {
-            Err(bin_error::Error::msg(format!("failed to get version: {error}")))
-        }
-        _ => Err(bin_error::Error::msg(format!("unexpected message: {res:?}"))),
+        rbw::protocol::Response::Error { error } => Err(
+            bin_error::Error::msg(format!("failed to get version: {error}")),
+        ),
+        _ => Err(bin_error::Error::msg(format!(
+            "unexpected message: {res:?}"
+        ))),
     }
 }
 
@@ -160,9 +170,11 @@ fn simple_action(action: rbw::protocol::Action) -> bin_error::Result<()> {
     match res {
         rbw::protocol::Response::Ack => Ok(()),
         rbw::protocol::Response::Error { error } => {
-            Err(bin_error::Error::msg(format!("{error}")))
+            Err(bin_error::Error::msg(error))
         }
-        _ => Err(bin_error::Error::msg(format!("unexpected message: {res:?}"))),
+        _ => Err(bin_error::Error::msg(format!(
+            "unexpected message: {res:?}"
+        ))),
     }
 }
 

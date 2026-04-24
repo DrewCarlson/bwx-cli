@@ -40,11 +40,22 @@ impl std::fmt::Display for Uuid {
              {:02x}{:02x}-\
              {:02x}{:02x}-\
              {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-            b[0], b[1], b[2], b[3],
-            b[4], b[5],
-            b[6], b[7],
-            b[8], b[9],
-            b[10], b[11], b[12], b[13], b[14], b[15],
+            b[0],
+            b[1],
+            b[2],
+            b[3],
+            b[4],
+            b[5],
+            b[6],
+            b[7],
+            b[8],
+            b[9],
+            b[10],
+            b[11],
+            b[12],
+            b[13],
+            b[14],
+            b[15],
         )
     }
 }
@@ -65,9 +76,8 @@ impl std::str::FromStr for Uuid {
         {
             return Err(ParseUuidError);
         }
-        let hex_positions = [
-            0, 2, 4, 6, 9, 11, 14, 16, 19, 21, 24, 26, 28, 30, 32, 34,
-        ];
+        let hex_positions =
+            [0, 2, 4, 6, 9, 11, 14, 16, 19, 21, 24, 26, 28, 30, 32, 34];
         let mut out = [0_u8; 16];
         for (i, &pos) in hex_positions.iter().enumerate() {
             let hi = from_hex(bytes[pos])?;
@@ -114,14 +124,11 @@ mod tests {
     #[test]
     fn pinned_format() {
         let bytes = [
-            0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0x4c, 0xde, 0x8f, 0x01,
-            0x23, 0x45, 0x67, 0x89, 0xab, 0xcd,
+            0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0x4c, 0xde, 0x8f, 0x01, 0x23,
+            0x45, 0x67, 0x89, 0xab, 0xcd,
         ];
         let u = Uuid(bytes);
-        assert_eq!(
-            u.to_string(),
-            "01234567-89ab-4cde-8f01-23456789abcd"
-        );
+        assert_eq!(u.to_string(), "01234567-89ab-4cde-8f01-23456789abcd");
         let parsed =
             Uuid::from_str("01234567-89ab-4cde-8f01-23456789abcd").unwrap();
         assert_eq!(parsed, u);

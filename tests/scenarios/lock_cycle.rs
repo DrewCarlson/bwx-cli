@@ -14,8 +14,8 @@ fn lock_then_unlock_again() {
     harness.login_and_unlock();
 
     // Populate one entry so we can verify the vault round-trips across locks.
-    let out = harness
-        .run_with_stdin(&["add", "before.lock"], b"pre-lock-pw\n\n\n");
+    let out =
+        harness.run_with_stdin(&["add", "before.lock"], b"pre-lock-pw\n\n\n");
     assert!(out.status.success(), "pre-lock add failed");
 
     // unlocked exits 0 when the agent is unlocked.

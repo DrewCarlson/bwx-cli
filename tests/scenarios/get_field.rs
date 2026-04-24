@@ -14,10 +14,8 @@ fn get_field_selects_specific_field() {
     harness.login_and_unlock();
 
     // Entry with an explicit username so we can fetch `user` via --field.
-    let out = harness.run_with_stdin(
-        &["add", "field.example", "alice"],
-        b"pw\n\n\n",
-    );
+    let out = harness
+        .run_with_stdin(&["add", "field.example", "alice"], b"pw\n\n\n");
     assert!(
         out.status.success(),
         "add failed: stderr={}",

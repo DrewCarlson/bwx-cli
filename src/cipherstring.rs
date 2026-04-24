@@ -1,8 +1,8 @@
 use crate::prelude::*;
 
 use aes::cipher::{
-    BlockDecryptMut as _, BlockEncryptMut as _, KeyIvInit as _,
-    generic_array::GenericArray,
+    generic_array::GenericArray, BlockDecryptMut as _, BlockEncryptMut as _,
+    KeyIvInit as _,
 };
 use hmac::Mac as _;
 use pkcs8::DecodePrivateKey as _;
@@ -148,8 +148,7 @@ impl CipherString {
             for chunk in buf.chunks_exact_mut(16) {
                 cipher.decrypt_block_mut(GenericArray::from_mut_slice(chunk));
             }
-            let unpadded_len =
-                pkcs7_unpad(&buf).ok_or(Error::Padding)?.len();
+            let unpadded_len = pkcs7_unpad(&buf).ok_or(Error::Padding)?.len();
             buf.truncate(unpadded_len);
             Ok(buf)
         } else {
@@ -186,8 +185,7 @@ impl CipherString {
             for chunk in data.chunks_exact_mut(16) {
                 cipher.decrypt_block_mut(GenericArray::from_mut_slice(chunk));
             }
-            let unpadded_len =
-                pkcs7_unpad(data).ok_or(Error::Padding)?.len();
+            let unpadded_len = pkcs7_unpad(data).ok_or(Error::Padding)?.len();
             res.truncate(unpadded_len);
             Ok(res)
         } else {
@@ -344,15 +342,25 @@ fn test_pkcs7_unpad() {
 #[test]
 fn test_pkcs7_pad() {
     let tests: &[(&[u8], &[u8])] = &[
-        (&[], &[16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16]),
-        (&[0x69], &[0x69, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15]),
         (
+            &[],
             &[
-                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+                16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+                16,
             ],
+        ),
+        (
+            &[0x69],
             &[
-                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-                16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+                0x69, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+                15,
+            ],
+        ),
+        (
+            &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+            &[
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 16,
+                16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
             ],
         ),
     ];
@@ -367,7 +375,7 @@ fn test_pkcs7_pad() {
 #[cfg(test)]
 fn test_keys() -> crate::locked::Keys {
     let mut v = crate::locked::Vec::new();
-    v.extend((0u8..64).map(|i| i));
+    v.extend(0u8..64);
     crate::locked::Keys::new(v)
 }
 

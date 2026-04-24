@@ -95,7 +95,10 @@ fn data_dir() -> std::path::PathBuf {
 fn xdg_or(env: &str, fallback_rel: &str) -> std::path::PathBuf {
     std::env::var_os(env)
         .filter(|v| std::path::Path::new(v).is_absolute())
-        .map_or_else(|| home_dir().join(fallback_rel), std::path::PathBuf::from)
+        .map_or_else(
+            || home_dir().join(fallback_rel),
+            std::path::PathBuf::from,
+        )
 }
 
 #[cfg(not(target_os = "macos"))]

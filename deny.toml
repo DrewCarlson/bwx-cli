@@ -13,9 +13,9 @@ ignore = [
     # this is a timing attack against using the rsa crate for encryption, but
     # we only use rsa decryption here
     "RUSTSEC-2023-0071",
-    # this is only a warning about being unmaintained, the only known
-    # undefined behavior is in a function we don't use
-    "RUSTSEC-2025-0069",
+    # unsoundness only triggers when a consumer installs a custom rand logger;
+    # rbw doesn't register one, so the CryptoRng paths we rely on are safe.
+    "RUSTSEC-2026-0097",
 ]
 
 [bans]

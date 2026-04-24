@@ -18,7 +18,7 @@ impl<const N: usize> FixedVec<N> {
         }
     }
 
-    fn capacity(&self) -> usize {
+    const fn capacity() -> usize {
         N
     }
 
@@ -64,22 +64,26 @@ impl Default for Vec {
     fn default() -> Self {
         let data = Box::new(FixedVec::<LEN>::new());
         let lock = match REGION_LOCK_WORKS.get() {
-            Some(true) => {
-                Some(region::lock(data.as_ptr(), data.capacity()).unwrap())
-            }
+            Some(true) => Some(
+                region::lock(data.as_ptr(), FixedVec::<LEN>::capacity())
+                    .unwrap(),
+            ),
             Some(false) => None,
-            None => match region::lock(data.as_ptr(), data.capacity()) {
-                Ok(lock) => {
-                    let _ = REGION_LOCK_WORKS.set(true);
-                    Some(lock)
-                }
-                Err(e) => {
-                    if REGION_LOCK_WORKS.set(false).is_ok() {
-                        eprintln!("failed to lock memory region: {e}");
+            None => {
+                match region::lock(data.as_ptr(), FixedVec::<LEN>::capacity())
+                {
+                    Ok(lock) => {
+                        let _ = REGION_LOCK_WORKS.set(true);
+                        Some(lock)
                     }
-                    None
+                    Err(e) => {
+                        if REGION_LOCK_WORKS.set(false).is_ok() {
+                            eprintln!("failed to lock memory region: {e}");
+                        }
+                        None
+                    }
                 }
-            },
+            }
         };
         Self { data, _lock: lock }
     }
@@ -231,7 +235,7 @@ mod tests {
         let mut v = FixedVec::<8>::new();
         v.extend([1u8, 2, 3, 4].into_iter());
         v.truncate(0);
-        assert_eq!(v.as_slice(), &[] as &[u8]);
+        assert!(v.as_slice().is_empty());
         assert_eq!(v.data[..4], [1, 2, 3, 4]);
     }
 

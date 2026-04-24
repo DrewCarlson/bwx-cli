@@ -31,7 +31,10 @@ fn generate_stores_entry_and_sync_is_idempotent() {
     );
 
     // Round-trip through `get` matches what `generate` printed.
-    let fetched = harness.check(&["get", "gen.example"]).trim_end().to_string();
+    let fetched = harness
+        .check(&["get", "gen.example"])
+        .trim_end()
+        .to_string();
     assert_eq!(fetched, gen_out, "stored password differs from generated");
 
     // Sync should be idempotent — running it twice from a clean state yields

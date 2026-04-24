@@ -379,7 +379,9 @@ async fn unlock_state(
         let db = load_db().await?;
 
         let Some(kdf) = db.kdf else {
-            return Err(bin_error::Error::msg("failed to find kdf type in db"));
+            return Err(bin_error::Error::msg(
+                "failed to find kdf type in db",
+            ));
         };
 
         let Some(iterations) = db.iterations else {
@@ -514,7 +516,9 @@ pub async fn sync(
     let access_token = if let Some(access_token) = &db.access_token {
         access_token.clone()
     } else {
-        return Err(bin_error::Error::msg("failed to find access token in db"));
+        return Err(bin_error::Error::msg(
+            "failed to find access token in db",
+        ));
     };
     let refresh_token = if let Some(refresh_token) = &db.refresh_token {
         refresh_token.clone()
@@ -590,7 +594,9 @@ async fn decrypt_cipher(
         let db = load_db().await?;
 
         let Some(kdf) = db.kdf else {
-            return Err(bin_error::Error::msg("failed to find kdf type in db"));
+            return Err(bin_error::Error::msg(
+                "failed to find kdf type in db",
+            ));
         };
 
         let Some(iterations) = db.iterations else {
@@ -856,7 +862,10 @@ pub async fn subscribe_to_notifications(
         .connect(websocket_url)
         .await
         .err()
-        .map_or_else(|| Ok(()), |err| Err(bin_error::Error::msg(err.to_string())))
+        .map_or_else(
+            || Ok(()),
+            |err| Err(bin_error::Error::msg(err.to_string())),
+        )
 }
 
 pub async fn get_ssh_public_keys(
