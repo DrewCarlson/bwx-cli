@@ -1,5 +1,13 @@
 use sha2::Digest as _;
 
+/// How long a Touch ID authorization remains valid for a given session
+/// before the agent will prompt again. Bumped on every access, so the
+/// window is "idle time," not a hard upper bound on the total command
+/// duration. 60 s is long enough for slow interactive commands and short
+/// enough that a backgrounded stale session can't be reused tomorrow.
+const TOUCHID_SESSION_TTL: std::time::Duration =
+    std::time::Duration::from_secs(60);
+
 pub struct State {
     pub priv_key: Option<rbw::locked::Keys>,
     pub org_keys:
@@ -11,6 +19,13 @@ pub struct State {
     pub notifications_handler: crate::notifications::Handler,
     pub master_password_reprompt: std::collections::HashSet<[u8; 32]>,
     pub master_password_reprompt_initialized: bool,
+
+    /// Session tokens that have already cleared a Touch ID prompt, each
+    /// mapped to the last time we saw activity from that session. Bumped
+    /// on every authorized access so a long-running command doesn't time
+    /// out mid-execution. Cleared on `Lock`.
+    pub touchid_sessions:
+        std::collections::HashMap<String, std::time::Instant>,
 
     // this is stored here specifically for the use of the ssh agent, because
     // requests made to the ssh agent don't include an environment, and so we
@@ -47,6 +62,32 @@ impl State {
         self.priv_key = None;
         self.org_keys = None;
         self.timeout.clear();
+        self.clear_touchid_sessions();
+    }
+
+    /// Touch ID session cache helpers. A session with a still-fresh
+    /// timestamp (within `TOUCHID_SESSION_TTL`) may skip the biometric
+    /// prompt on subsequent requests within the same `rbw <command>`
+    /// invocation.
+    pub fn touchid_session_is_fresh(&self, session_id: &str) -> bool {
+        self.touchid_sessions
+            .get(session_id)
+            .is_some_and(|ts| ts.elapsed() < TOUCHID_SESSION_TTL)
+    }
+
+    pub fn record_touchid_session(&mut self, session_id: &str) {
+        self.touchid_sessions
+            .insert(session_id.to_string(), std::time::Instant::now());
+        self.prune_touchid_sessions();
+    }
+
+    pub fn clear_touchid_sessions(&mut self) {
+        self.touchid_sessions.clear();
+    }
+
+    fn prune_touchid_sessions(&mut self) {
+        self.touchid_sessions
+            .retain(|_, ts| ts.elapsed() < TOUCHID_SESSION_TTL);
     }
 
     pub fn set_sync_timeout(&self) {

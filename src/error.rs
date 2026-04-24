@@ -158,6 +158,12 @@ pub enum Error {
     #[error("pinentry cancelled")]
     PinentryCancelled,
 
+    #[error("native password prompt unavailable on this platform")]
+    NativePromptUnsupported,
+
+    #[error("native password prompt failed at {stage}: code {code}")]
+    NativePromptFailed { code: i32, stage: &'static str },
+
     #[error("pinentry error: {error}")]
     PinentryErrorMessage { error: String },
 

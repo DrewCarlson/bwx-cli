@@ -2,6 +2,33 @@ use std::{io::Read as _, os::unix::ffi::OsStringExt as _};
 
 use crate::bin_error::{self, ContextExt as _};
 
+/// Per-CLI-process session identifier. Generated once on first access and
+/// attached to every outbound request so the agent can collapse a single
+/// `rbw <command>` invocation into one Touch ID prompt even when the
+/// command fires many `Decrypt`/`Encrypt` IPCs.
+fn session_id() -> String {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| rbw::uuid::new_v4().to_string()).clone()
+}
+
+/// Human-readable command description surfaced to the user in biometric
+/// and pinentry prompts on the agent side. Set once at rbw startup from
+/// `main.rs`; read by `build_request` when each IPC is assembled.
+static PURPOSE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+pub fn set_purpose(s: String) {
+    let _ = PURPOSE.set(s);
+}
+
+fn build_request(action: rbw::protocol::Action) -> rbw::protocol::Request {
+    rbw::protocol::Request::new_with_session(
+        get_environment(),
+        action,
+        session_id(),
+        PURPOSE.get().cloned(),
+    )
+}
+
 pub fn register() -> bin_error::Result<()> {
     simple_action(rbw::protocol::Action::Register)
 }
@@ -17,10 +44,7 @@ pub fn unlock() -> bin_error::Result<()> {
 pub fn unlocked() -> bin_error::Result<()> {
     match crate::sock::Sock::connect() {
         Ok(mut sock) => {
-            sock.send(&rbw::protocol::Request::new(
-                get_environment(),
-                rbw::protocol::Action::CheckLock,
-            ))?;
+            sock.send(&build_request(rbw::protocol::Action::CheckLock))?;
 
             let res = sock.recv()?;
             match res {
@@ -67,10 +91,7 @@ pub fn quit() -> bin_error::Result<()> {
                     "failed to read pid from pidfile",
                 ));
             };
-            sock.send(&rbw::protocol::Request::new(
-                get_environment(),
-                rbw::protocol::Action::Quit,
-            ))?;
+            sock.send(&build_request(rbw::protocol::Action::Quit))?;
             wait_for_exit(pid);
             Ok(())
         }
@@ -90,14 +111,11 @@ pub fn decrypt(
     org_id: Option<&str>,
 ) -> bin_error::Result<String> {
     let mut sock = connect()?;
-    sock.send(&rbw::protocol::Request::new(
-        get_environment(),
-        rbw::protocol::Action::Decrypt {
-            cipherstring: cipherstring.to_string(),
-            entry_key: entry_key.map(std::string::ToString::to_string),
-            org_id: org_id.map(std::string::ToString::to_string),
-        },
-    ))?;
+    sock.send(&build_request(rbw::protocol::Action::Decrypt {
+        cipherstring: cipherstring.to_string(),
+        entry_key: entry_key.map(std::string::ToString::to_string),
+        org_id: org_id.map(std::string::ToString::to_string),
+    }))?;
 
     let res = sock.recv()?;
     match res {
@@ -116,13 +134,10 @@ pub fn encrypt(
     org_id: Option<&str>,
 ) -> bin_error::Result<String> {
     let mut sock = connect()?;
-    sock.send(&rbw::protocol::Request::new(
-        get_environment(),
-        rbw::protocol::Action::Encrypt {
-            plaintext: plaintext.to_string(),
-            org_id: org_id.map(std::string::ToString::to_string),
-        },
-    ))?;
+    sock.send(&build_request(rbw::protocol::Action::Encrypt {
+        plaintext: plaintext.to_string(),
+        org_id: org_id.map(std::string::ToString::to_string),
+    }))?;
 
     let res = sock.recv()?;
     match res {
@@ -142,12 +157,36 @@ pub fn clipboard_store(text: &str) -> bin_error::Result<()> {
     })
 }
 
+pub fn touchid_enroll() -> bin_error::Result<()> {
+    simple_action(rbw::protocol::Action::TouchIdEnroll)
+}
+
+pub fn touchid_disable() -> bin_error::Result<()> {
+    simple_action(rbw::protocol::Action::TouchIdDisable)
+}
+
+pub fn touchid_status() -> bin_error::Result<(bool, String, Option<String>)> {
+    let mut sock = connect()?;
+    sock.send(&build_request(rbw::protocol::Action::TouchIdStatus))?;
+    let res = sock.recv()?;
+    match res {
+        rbw::protocol::Response::TouchIdStatus {
+            enrolled,
+            gate,
+            keychain_label,
+        } => Ok((enrolled, gate, keychain_label)),
+        rbw::protocol::Response::Error { error } => {
+            Err(bin_error::Error::msg(error))
+        }
+        _ => Err(bin_error::Error::msg(format!(
+            "unexpected message: {res:?}"
+        ))),
+    }
+}
+
 pub fn version() -> bin_error::Result<u32> {
     let mut sock = connect()?;
-    sock.send(&rbw::protocol::Request::new(
-        get_environment(),
-        rbw::protocol::Action::Version,
-    ))?;
+    sock.send(&build_request(rbw::protocol::Action::Version))?;
 
     let res = sock.recv()?;
     match res {
@@ -164,7 +203,7 @@ pub fn version() -> bin_error::Result<u32> {
 fn simple_action(action: rbw::protocol::Action) -> bin_error::Result<()> {
     let mut sock = connect()?;
 
-    sock.send(&rbw::protocol::Request::new(get_environment(), action))?;
+    sock.send(&build_request(action))?;
 
     let res = sock.recv()?;
     match res {

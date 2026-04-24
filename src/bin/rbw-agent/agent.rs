@@ -117,7 +117,7 @@ async fn handle_request(
             return Ok(());
         }
     };
-    let (action, environment) = req.into_parts();
+    let (action, environment, session_id, purpose) = req.into_parts();
     let set_timeout = match &action {
         rbw::protocol::Action::Register => {
             crate::actions::register(sock, &environment).await?;
@@ -137,6 +137,9 @@ async fn handle_request(
         }
         rbw::protocol::Action::Lock => {
             crate::actions::lock(sock, state.clone()).await?;
+            // Revoke all Touch ID authorizations so a future unlock forces
+            // a fresh biometric prompt.
+            state.lock().await.clear_touchid_sessions();
             false
         }
         rbw::protocol::Action::Sync => {
@@ -158,6 +161,8 @@ async fn handle_request(
                 &cipherstring,
                 entry_key.as_deref(),
                 org_id.as_deref(),
+                session_id.as_deref(),
+                purpose.as_deref(),
             )
             .await?;
             true
@@ -168,18 +173,38 @@ async fn handle_request(
                 state.clone(),
                 plaintext,
                 org_id.as_deref(),
+                session_id.as_deref(),
+                purpose.as_deref(),
             )
             .await?;
             true
         }
         rbw::protocol::Action::ClipboardStore { text } => {
-            crate::actions::clipboard_store(sock, state.clone(), text)
-                .await?;
+            crate::actions::clipboard_store(
+                sock,
+                state.clone(),
+                text,
+                session_id.as_deref(),
+                purpose.as_deref(),
+            )
+            .await?;
             true
         }
         rbw::protocol::Action::Quit => std::process::exit(0),
         rbw::protocol::Action::Version => {
             crate::actions::version(sock).await?;
+            false
+        }
+        rbw::protocol::Action::TouchIdEnroll => {
+            crate::actions::touchid_enroll(sock, state.clone()).await?;
+            true
+        }
+        rbw::protocol::Action::TouchIdDisable => {
+            crate::actions::touchid_disable(sock).await?;
+            false
+        }
+        rbw::protocol::Action::TouchIdStatus => {
+            crate::actions::touchid_status(sock).await?;
             false
         }
     };

@@ -22,6 +22,13 @@ pub struct Request {
     tty: Option<String>,
     environment: Option<Environment>,
     action: Action,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    /// Human-readable description of what the user ran (e.g. `get
+    /// google.com`). Not authentication-relevant; used only to enrich
+    /// UI prompts on the agent side (Touch ID dialog, pinentry CONFIRM).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    purpose: Option<String>,
 }
 
 impl Request {
@@ -30,16 +37,43 @@ impl Request {
             tty: None,
             environment: Some(environment),
             action,
+            session_id: None,
+            purpose: None,
         }
     }
 
-    pub fn into_parts(self) -> (Action, Environment) {
+    /// Like `new`, but tags the request with a per-CLI-process session
+    /// token and a human-readable purpose string. The agent uses the
+    /// session to coalesce Touch ID prompts so that a single `rbw
+    /// <command>` invocation only pops one biometric dialog regardless
+    /// of how many `Decrypt`/`Encrypt` IPCs it fires; the purpose is
+    /// shown on the prompt itself.
+    pub fn new_with_session(
+        environment: Environment,
+        action: Action,
+        session_id: String,
+        purpose: Option<String>,
+    ) -> Self {
+        Self {
+            tty: None,
+            environment: Some(environment),
+            action,
+            session_id: Some(session_id),
+            purpose,
+        }
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (Action, Environment, Option<String>, Option<String>) {
         (
             self.action,
             self.environment.unwrap_or_else(|| Environment {
                 tty: self.tty.map(|tty| SerializableOsString(tty.into())),
                 env_vars: vec![],
             }),
+            self.session_id,
+            self.purpose,
         )
     }
 }
@@ -188,14 +222,35 @@ pub enum Action {
     },
     Quit,
     Version,
+    /// Enroll the currently-unlocked vault keys under a Touch ID-gated
+    /// Keychain wrapper key. Requires the agent to already be unlocked.
+    TouchIdEnroll,
+    /// Remove the Keychain wrapper key and the on-disk enrollment blob.
+    TouchIdDisable,
+    /// Report whether Touch ID enrollment is active and summarise the
+    /// current `touchid_gate` setting.
+    TouchIdStatus,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 #[serde(tag = "type")]
 pub enum Response {
     Ack,
-    Error { error: String },
-    Decrypt { plaintext: String },
-    Encrypt { cipherstring: String },
-    Version { version: u32 },
+    Error {
+        error: String,
+    },
+    Decrypt {
+        plaintext: String,
+    },
+    Encrypt {
+        cipherstring: String,
+    },
+    Version {
+        version: u32,
+    },
+    TouchIdStatus {
+        enrolled: bool,
+        gate: String,
+        keychain_label: Option<String>,
+    },
 }

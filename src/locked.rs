@@ -163,6 +163,12 @@ impl Keys {
     pub fn mac_key(&self) -> &[u8] {
         &self.keys.data()[32..64]
     }
+
+    /// Full 64-byte `enc_key` || `mac_key` buffer. Used by Touch ID
+    /// enroll to wrap the vault keys into a `CipherString`.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.keys.data()[0..64]
+    }
 }
 
 #[derive(Clone)]

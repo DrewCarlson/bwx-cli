@@ -1,6 +1,70 @@
 use crate::bin_error::{self, ContextExt as _};
 use sha2::Digest as _;
 
+/// Gate a pending sensitive response on a Touch ID prompt if the user has
+/// opted in. A `session_id` (assigned by the rbw CLI once per invocation)
+/// lets us coalesce the many `Decrypt`/`Encrypt` IPCs fired by a single
+/// `rbw <command>` into one prompt. Sessions expire after
+/// `TOUCHID_SESSION_TTL` of inactivity, and are flushed whenever the
+/// vault is locked. Cancelling the prompt returns a clean error. No
+/// behavior on non-macOS builds.
+async fn enforce_touchid_gate(
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+    kind: rbw::touchid::Kind,
+    session_id: Option<&str>,
+    purpose: Option<&str>,
+) -> bin_error::Result<()> {
+    let gate = rbw::config::Config::load()
+        .map_or(rbw::touchid::Gate::Off, |c| c.touchid_gate);
+    if !rbw::touchid::gate_applies(gate, kind) {
+        return Ok(());
+    }
+    if let Some(id) = session_id {
+        let mut s = state.lock().await;
+        if s.touchid_session_is_fresh(id) {
+            // Bump the idle timer so long commands don't expire mid-run.
+            s.record_touchid_session(id);
+            return Ok(());
+        }
+        // Session not fresh. If we're enrolled, evict the in-memory keys
+        // so the "vault stays locked at rest" invariant holds — a new
+        // Touch ID prompt below will re-load them from Keychain.
+        #[cfg(target_os = "macos")]
+        if rbw::touchid::blob::Blob::exists() {
+            s.priv_key = None;
+            s.org_keys = None;
+        }
+        drop(s);
+    }
+    let reason = purpose.map_or_else(
+        || format!("rbw: authorize {kind:?} access"),
+        |p| format!("rbw: authorize {p}"),
+    );
+    let ok = rbw::touchid::require_presence(&reason)
+        .await
+        .map_err(|e| bin_error::Error::msg(e.to_string()))?;
+    if !ok {
+        return Err(bin_error::Error::msg(
+            "request denied: Touch ID not confirmed",
+        ));
+    }
+    if let Some(id) = session_id {
+        state.lock().await.record_touchid_session(id);
+    }
+    // If keys were evicted on session expiry above, transparently
+    // reload them from the Touch ID blob. The prompt the user just
+    // confirmed also authorizes this Keychain retrieval (same
+    // biometric session), so no double-prompt in practice.
+    if state.lock().await.needs_unlock()
+        && !try_unlock_via_touchid(state.clone()).await.is_unlocked()
+    {
+        return Err(bin_error::Error::msg(
+            "Touch ID unlock failed after gate confirmation",
+        ));
+    }
+    Ok(())
+}
+
 pub async fn register(
     sock: &mut crate::sock::Sock,
     environment: &rbw::protocol::Environment,
@@ -371,11 +435,72 @@ async fn login_success(
     Ok(())
 }
 
+/// Prompt the user for the master password at unlock time. On macOS
+/// this defaults to a native `CFUserNotification` modal (works without
+/// a terminal — ideal for ssh-sign / GUI-triggered unlocks); user can
+/// set `macos_unlock_dialog = false` to force pinentry. On other
+/// platforms this always goes through pinentry.
+async fn prompt_unlock_password(
+    environment: &rbw::protocol::Environment,
+    err: Option<&str>,
+) -> bin_error::Result<rbw::locked::Password> {
+    let profile = rbw::dirs::profile();
+    let title = "Unlock rbw vault";
+    let use_native = cfg!(target_os = "macos")
+        && rbw::config::Config::load_async()
+            .await
+            .map_or(cfg!(target_os = "macos"), |c| c.macos_unlock_dialog);
+
+    let message = err.map_or_else(
+        || format!("Enter master password for '{profile}'"),
+        |e| format!("{e} — enter master password for '{profile}'"),
+    );
+
+    if use_native {
+        let title = title.to_string();
+        // CFUserNotification is synchronous / blocking; run on a
+        // blocking thread so we don't stall the tokio runtime.
+        match tokio::task::spawn_blocking(move || {
+            rbw::pinentry_native::prompt_master_password(&title, &message)
+        })
+        .await
+        .map_err(|e| bin_error::Error::msg(format!("join: {e}")))?
+        {
+            Ok(pw) => return Ok(pw),
+            Err(rbw::error::Error::NativePromptUnsupported) => {
+                // Shouldn't happen on macOS; fall through to pinentry.
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    let pinentry = config_pinentry().await?;
+    rbw::pinentry::getpin(
+        &pinentry,
+        "Master Password",
+        &format!("Unlock the local database for '{profile}'"),
+        err,
+        environment,
+        true,
+    )
+    .await
+    .context("failed to read password from pinentry")
+}
+
 async fn unlock_state(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     environment: &rbw::protocol::Environment,
 ) -> bin_error::Result<()> {
     if state.lock().await.needs_unlock() {
+        // Prefer Touch ID-based unlock if the user has enrolled and the
+        // gate is active. Falls through to pinentry on cancel or error,
+        // surfacing the reason in the first prompt so the user knows
+        // why the master password is suddenly being asked for.
+        let touchid_hint = match try_unlock_via_touchid(state.clone()).await {
+            TouchIdUnlockOutcome::Unlocked => return Ok(()),
+            TouchIdUnlockOutcome::Fallback(reason) => Some(reason),
+        };
+
         let db = load_db().await?;
 
         let Some(kdf) = db.kdf else {
@@ -406,28 +531,21 @@ async fn unlock_state(
 
         let email = config_email().await?;
 
-        let mut err_msg = None;
+        // Seed the retry loop with the Touch ID fallback reason (if any)
+        // so the first prompt explains why the user is seeing it.
+        let mut err_msg = touchid_hint.map(str::to_string);
         for i in 1_u8..=3 {
             let err = if i > 1 {
                 // this unwrap is safe because we only ever continue the loop
                 // if we have set err_msg
                 Some(format!("{} (attempt {}/3)", err_msg.unwrap(), i))
             } else {
-                None
+                err_msg.clone()
             };
-            let password = rbw::pinentry::getpin(
-                &config_pinentry().await?,
-                "Master Password",
-                &format!(
-                    "Unlock the local database for '{}'",
-                    rbw::dirs::profile()
-                ),
-                err.as_deref(),
-                environment,
-                true,
-            )
-            .await
-            .context("failed to read password from pinentry")?;
+            let password =
+                prompt_unlock_password(environment, err.as_deref())
+                    .await
+                    .context("failed to read master password")?;
             match rbw::actions::unlock(
                 &email,
                 &password,
@@ -481,6 +599,144 @@ async fn unlock_success(
     state.priv_key = Some(keys);
     state.org_keys = Some(org_keys);
     Ok(())
+}
+
+/// Attempt to unlock the vault using the Touch ID-enrolled wrapper key.
+/// Outcome of an attempted Touch ID-backed unlock. The `Fallback`
+/// variants feed a human-readable hint into the caller's next prompt
+/// so the user knows why they're suddenly being asked for the master
+/// password instead of just seeing a Touch ID dialog.
+#[derive(Debug)]
+enum TouchIdUnlockOutcome {
+    Unlocked,
+    Fallback(&'static str),
+}
+
+impl TouchIdUnlockOutcome {
+    fn is_unlocked(&self) -> bool {
+        matches!(self, Self::Unlocked)
+    }
+}
+
+/// Attempt to unlock the vault using the Touch ID-enrolled wrapper
+/// key. Returns `Unlocked` on success. Returns `Fallback(reason)` when
+/// enrollment is absent, the gate is off, or the user cancelled /
+/// biometry was invalidated — the caller should then fall through to
+/// the pinentry path, optionally surfacing `reason` in the prompt.
+#[cfg(target_os = "macos")]
+async fn try_unlock_via_touchid(
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+) -> TouchIdUnlockOutcome {
+    let gate = rbw::config::Config::load()
+        .map_or(rbw::touchid::Gate::Off, |c| c.touchid_gate);
+    if matches!(gate, rbw::touchid::Gate::Off) {
+        log::debug!("touchid: gate is off; skipping Keychain unlock");
+        return TouchIdUnlockOutcome::Fallback(
+            "Touch ID gate disabled (touchid_gate=off)",
+        );
+    }
+    let Ok(blob) = rbw::touchid::blob::Blob::load() else {
+        log::debug!("touchid: no enrollment blob on disk");
+        return TouchIdUnlockOutcome::Fallback(
+            "no Touch ID enrollment (run `rbw touchid enroll`)",
+        );
+    };
+    log::debug!(
+        "touchid: attempting Keychain load for label {label}",
+        label = blob.keychain_label
+    );
+    let prompt = format!("Unlock the {} vault", rbw::dirs::profile());
+    let seed =
+        match rbw::touchid::keychain::load(&blob.keychain_label, &prompt) {
+            Ok(bytes) if bytes.len() == 64 => bytes,
+            Ok(other) => {
+                log::warn!(
+                    "touchid: wrapper key has unexpected length: {}",
+                    other.len()
+                );
+                return TouchIdUnlockOutcome::Fallback(
+                    "Touch ID wrapper key corrupted; re-enroll",
+                );
+            }
+            Err(rbw::touchid::keychain::Error::UserCancelled) => {
+                log::debug!("touchid: user cancelled Keychain prompt");
+                return TouchIdUnlockOutcome::Fallback("Touch ID cancelled");
+            }
+            Err(rbw::touchid::keychain::Error::Invalidated) => {
+                log::warn!(
+                    "touchid: biometric set changed; master password \
+                 required to re-enroll"
+                );
+                return TouchIdUnlockOutcome::Fallback(
+                    "biometric set changed — run `rbw touchid enroll` \
+                 after unlocking to re-bind",
+                );
+            }
+            Err(rbw::touchid::keychain::Error::NotFound) => {
+                log::warn!(
+                    "touchid: enrollment blob present but Keychain item \
+                 missing; likely deleted outside rbw"
+                );
+                return TouchIdUnlockOutcome::Fallback(
+                    "Touch ID Keychain item missing; re-enroll",
+                );
+            }
+            Err(e) => {
+                log::warn!("touchid: Keychain load failed: {e}");
+                return TouchIdUnlockOutcome::Fallback(
+                    "Touch ID unlock failed (see agent log)",
+                );
+            }
+        };
+    let wrapper_keys = rbw::touchid::blob::keys_from_wrapper_seed(&seed);
+
+    let Ok(cs) = rbw::cipherstring::CipherString::new(&blob.wrapped_priv_key)
+    else {
+        log::warn!("touchid: wrapped priv_key cipherstring malformed");
+        return TouchIdUnlockOutcome::Fallback(
+            "Touch ID blob corrupted; re-enroll",
+        );
+    };
+    let Ok(priv_bytes) = cs.decrypt_locked_symmetric(&wrapper_keys) else {
+        log::warn!("touchid: priv_key unwrap failed");
+        return TouchIdUnlockOutcome::Fallback(
+            "Touch ID blob decrypt failed; re-enroll",
+        );
+    };
+    let priv_key = rbw::locked::Keys::new(priv_bytes);
+
+    let mut org_keys = std::collections::HashMap::new();
+    for (oid, wrapped) in &blob.wrapped_org_keys {
+        let Ok(cs) = rbw::cipherstring::CipherString::new(wrapped) else {
+            log::warn!("touchid: wrapped org_key for {oid} malformed");
+            return TouchIdUnlockOutcome::Fallback(
+                "Touch ID blob corrupted; re-enroll",
+            );
+        };
+        let Ok(bytes) = cs.decrypt_locked_symmetric(&wrapper_keys) else {
+            log::warn!("touchid: org_key for {oid} unwrap failed");
+            return TouchIdUnlockOutcome::Fallback(
+                "Touch ID blob decrypt failed; re-enroll",
+            );
+        };
+        org_keys.insert(oid.clone(), rbw::locked::Keys::new(bytes));
+    }
+
+    let mut s = state.lock().await;
+    s.priv_key = Some(priv_key);
+    s.org_keys = Some(org_keys);
+    log::debug!(
+        "touchid: vault unlocked via Keychain ({} org key(s))",
+        blob.wrapped_org_keys.len()
+    );
+    TouchIdUnlockOutcome::Unlocked
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn try_unlock_via_touchid(
+    _state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+) -> TouchIdUnlockOutcome {
+    TouchIdUnlockOutcome::Fallback("Touch ID not supported on this platform")
 }
 
 pub async fn lock(
@@ -687,7 +943,16 @@ pub async fn decrypt(
     cipherstring: &str,
     entry_key: Option<&str>,
     org_id: Option<&str>,
+    session_id: Option<&str>,
+    purpose: Option<&str>,
 ) -> bin_error::Result<()> {
+    enforce_touchid_gate(
+        state.clone(),
+        rbw::touchid::Kind::VaultSecret,
+        session_id,
+        purpose,
+    )
+    .await?;
     let plaintext =
         decrypt_cipher(state, environment, cipherstring, entry_key, org_id)
             .await?;
@@ -701,7 +966,16 @@ pub async fn encrypt(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     plaintext: &str,
     org_id: Option<&str>,
+    session_id: Option<&str>,
+    purpose: Option<&str>,
 ) -> bin_error::Result<()> {
+    enforce_touchid_gate(
+        state.clone(),
+        rbw::touchid::Kind::VaultSecret,
+        session_id,
+        purpose,
+    )
+    .await?;
     let state = state.lock().await;
     let Some(keys) = state.key(org_id) else {
         return Err(bin_error::Error::msg(
@@ -724,7 +998,16 @@ pub async fn clipboard_store(
     sock: &mut crate::sock::Sock,
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     text: &str,
+    session_id: Option<&str>,
+    purpose: Option<&str>,
 ) -> bin_error::Result<()> {
+    enforce_touchid_gate(
+        state.clone(),
+        rbw::touchid::Kind::VaultSecret,
+        session_id,
+        purpose,
+    )
+    .await?;
     let mut state = state.lock().await;
     if let Some(clipboard) = &mut state.clipboard {
         clipboard.set_text(text).map_err(|e| {
@@ -744,6 +1027,8 @@ pub async fn clipboard_store(
     sock: &mut crate::sock::Sock,
     _state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     _text: &str,
+    _session_id: Option<&str>,
+    _purpose: Option<&str>,
 ) -> bin_error::Result<()> {
     sock.send(&rbw::protocol::Response::Error {
         error: "clipboard not supported".to_string(),
@@ -765,6 +1050,121 @@ pub async fn version(sock: &mut crate::sock::Sock) -> bin_error::Result<()> {
 async fn respond_ack(sock: &mut crate::sock::Sock) -> bin_error::Result<()> {
     sock.send(&rbw::protocol::Response::Ack).await?;
 
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub async fn touchid_enroll(
+    sock: &mut crate::sock::Sock,
+    state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+) -> bin_error::Result<()> {
+    use rand::RngCore as _;
+
+    // Require an unlocked vault so we have keys to wrap.
+    {
+        let s = state.lock().await;
+        if s.needs_unlock() {
+            return Err(bin_error::Error::msg(
+                "cannot enroll Touch ID while vault is locked; \
+                 run `rbw unlock` first",
+            ));
+        }
+    }
+
+    // Generate a random 64-byte wrapper seed; derive a locked::Keys from
+    // it; wrap the in-memory priv_key + every org key; store the seed in
+    // Keychain under a fresh label; write the blob to disk.
+    let mut seed = [0u8; 64];
+    rand::rng().fill_bytes(&mut seed);
+    let wrapper_keys = rbw::touchid::blob::keys_from_wrapper_seed(&seed);
+
+    let label = format!("rbw-touchid-{}", rbw::uuid::new_v4());
+
+    let (wrapped_priv_key, wrapped_org_keys) = {
+        let s = state.lock().await;
+        let priv_key = s.priv_key.as_ref().ok_or_else(|| {
+            bin_error::Error::msg("priv_key missing post-unlock")
+        })?;
+        let org_keys = s.org_keys.as_ref().ok_or_else(|| {
+            bin_error::Error::msg("org_keys missing post-unlock")
+        })?;
+        let wrapped_priv =
+            rbw::cipherstring::CipherString::encrypt_symmetric(
+                &wrapper_keys,
+                priv_key.as_bytes(),
+            )
+            .context("wrap priv_key")?
+            .to_string();
+        let mut wrapped_org = std::collections::BTreeMap::new();
+        for (oid, k) in org_keys {
+            wrapped_org.insert(
+                oid.clone(),
+                rbw::cipherstring::CipherString::encrypt_symmetric(
+                    &wrapper_keys,
+                    k.as_bytes(),
+                )
+                .with_context(|| format!("wrap org key {oid}"))?
+                .to_string(),
+            );
+        }
+        (wrapped_priv, wrapped_org)
+    };
+
+    // If a prior enrollment exists, remove it first — we're rotating.
+    if let Ok(existing) = rbw::touchid::blob::Blob::load() {
+        let _ = rbw::touchid::keychain::delete(&existing.keychain_label);
+    }
+    rbw::touchid::keychain::store(&label, &seed)
+        .map_err(|e| bin_error::Error::msg(e.to_string()))?;
+
+    let blob = rbw::touchid::blob::Blob {
+        keychain_label: label,
+        wrapped_priv_key,
+        wrapped_org_keys,
+    };
+    blob.save().context("write touchid blob")?;
+
+    respond_ack(sock).await?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub async fn touchid_enroll(
+    _sock: &mut crate::sock::Sock,
+    _state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
+) -> bin_error::Result<()> {
+    Err(bin_error::Error::msg(
+        "touchid enroll is only supported on macOS",
+    ))
+}
+
+pub async fn touchid_disable(
+    sock: &mut crate::sock::Sock,
+) -> bin_error::Result<()> {
+    #[cfg(target_os = "macos")]
+    if let Ok(blob) = rbw::touchid::blob::Blob::load() {
+        let _ = rbw::touchid::keychain::delete(&blob.keychain_label);
+    }
+    rbw::touchid::blob::Blob::remove().context("remove touchid blob")?;
+    respond_ack(sock).await?;
+    Ok(())
+}
+
+pub async fn touchid_status(
+    sock: &mut crate::sock::Sock,
+) -> bin_error::Result<()> {
+    let config = rbw::config::Config::load()
+        .unwrap_or_else(|_| rbw::config::Config::new());
+    let (enrolled, label) = match rbw::touchid::blob::Blob::load() {
+        Ok(blob) => (true, Some(blob.keychain_label)),
+        Err(_) => (false, None),
+    };
+    sock.send(&rbw::protocol::Response::TouchIdStatus {
+        enrolled,
+        gate: config.touchid_gate.to_string(),
+        keychain_label: label,
+    })
+    .await?;
     Ok(())
 }
 

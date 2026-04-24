@@ -168,6 +168,76 @@ mechanism on your bitwarden account to use rbw. It allows you to use rbw
 with a supported mechanism, and use other clients with you preferred
 2FA mechanism.
 
+## Touch ID on macOS
+
+`rbw` integrates with Touch ID in two layers:
+
+1. **Authorization gate** (`touchid_gate`): pops a biometric prompt
+   before serving sensitive responses (vault reads, ssh signs). The
+   master password still unlocks the vault normally.
+2. **Keychain-wrapped vault key** (`rbw touchid enroll`): stores a
+   random wrapper key in the macOS Keychain under a `BiometryCurrentSet`
+   ACL. After enrollment, Touch ID replaces the master-password prompt
+   on unlock entirely. The master password is not stored.
+
+```sh
+# On macOS, install via the helper so the binaries come out code-signed;
+# on Linux/BSD just run cargo install as usual.
+./scripts/install.sh          # wraps `cargo install --path . --locked --force`
+
+rbw stop-agent
+rbw unlock                              # master password once
+rbw touchid enroll                      # wraps vault keys into Keychain
+rbw config set touchid_gate all         # or `signing`, or `off`
+rbw stop-agent                          # pick up the new blob
+
+rbw get google.com                      # Touch ID prompt, then password
+rbw touchid status                      # show enrollment + current gate
+rbw touchid disable                     # remove Keychain item + blob
+```
+
+Gate scopes:
+
+- `off` — no biometric prompt (default).
+- `signing` — gates only ssh-agent signs and `rbw code` TOTP output.
+- `all` — gates every response carrying plaintext secret material.
+
+### Code-signing on macOS
+
+Unsigned binaries get killed by AMFI when they try to talk to the
+Keychain. `./scripts/install.sh` handles this automatically: after
+`cargo install` it runs `./scripts/sign-macos.sh`, which picks the
+strongest signing identity available on your machine:
+
+1. `$IDENTITY` env var (explicit override).
+2. **Developer ID Application** cert (the `$99/year` paid tier).
+   Attaches a `keychain-access-groups = <TEAMID>.rbw` entitlement; the
+   Keychain item stores the wrapper key under an OS-enforced
+   `kSecAccessControlBiometryCurrentSet` ACL. Every read is
+   cryptographically gated by Touch ID.
+3. **Apple Development** cert (free via Xcode). Signs the binary but
+   *without* the entitlement — that combination requires a
+   provisioning profile, which CLI tools can't carry. Falls through to
+   the plain Keychain path.
+4. **Ad-hoc** (no cert). Plain Keychain path.
+
+Tiers 3 and 4 are functionally equivalent: the Keychain item itself is
+only protected by `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, and
+Touch ID enforcement lives in rbw-agent's own `LAContext::evaluate_policy`
+call before every retrieval. That's strictly weaker than tier 2 (a
+compromised user-level process could read the raw wrapper key from
+Keychain without triggering Touch ID) but on a single-user Mac is
+equivalent in practice to tier 2, since a user-level attacker would
+also have rbw-agent's memory.
+
+Run the sign step manually if you ever `cargo install` without the
+wrapper:
+
+```sh
+./scripts/sign-macos.sh                 # signs ~/.cargo/bin/rbw{,-agent}
+./scripts/sign-macos.sh /path/to/bindir # another install prefix
+```
+
 ## Signing git commits with rbw
 
 If you store an SSH key (Bitwarden cipher type "SSH Key") in your vault,
@@ -177,7 +247,7 @@ OpenSSH's `sshsig` format (the one git uses when `gpg.format = ssh`).
 Point your shell at the agent and configure git:
 
 ```sh
-export SSH_AUTH_SOCK="${XDG_RUNTIME_DIR:-/tmp}/rbw/ssh-agent-socket"
+export SSH_AUTH_SOCK="$(rbw ssh-socket)"
 
 git config --global gpg.format ssh
 # Use the public key you stored in Bitwarden under an entry named e.g. "git":
@@ -189,6 +259,60 @@ git config --global tag.gpgsign true
 rbw ssh-allowed-signers > ~/.config/git/allowed_signers
 git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
 ```
+
+### Using git-signing from GUI apps on macOS
+
+GUI apps launched from Finder/Spotlight/Dock (IntelliJ, VS Code, GitHub
+Desktop, etc.) do not inherit `SSH_AUTH_SOCK` from your shell's rc file.
+They pick up whatever was in `launchd`'s environment at login. To make
+`rbw-agent`'s socket available to those apps, set the variable via
+`launchctl`:
+
+```sh
+# Current login session only:
+launchctl setenv SSH_AUTH_SOCK "$(rbw ssh-socket)"
+# Fully quit and relaunch the GUI app (Cmd-Q, not just close-window).
+```
+
+To persist across reboots, install a LaunchAgent that runs at login:
+
+```sh
+mkdir -p ~/Library/LaunchAgents ~/bin
+cat > ~/bin/rbw-set-ssh-sock <<'EOF'
+#!/bin/sh
+exec /usr/bin/launchctl setenv SSH_AUTH_SOCK "$("$HOME/.cargo/bin/rbw" ssh-socket)"
+EOF
+chmod +x ~/bin/rbw-set-ssh-sock
+
+cat > ~/Library/LaunchAgents/net.tozt.rbw.ssh-auth-sock.plist <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>net.tozt.rbw.ssh-auth-sock</string>
+  <key>RunAtLoad</key><true/>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$HOME/bin/rbw-set-ssh-sock</string>
+  </array>
+</dict>
+</plist>
+EOF
+launchctl load ~/Library/LaunchAgents/net.tozt.rbw.ssh-auth-sock.plist
+```
+
+`launchctl setenv` only affects new GUI apps, so fully quit and relaunch
+the editor after loading the agent.
+
+Note that `rbw-agent` itself is not started by this script — it spawns
+lazily the first time any `rbw <command>` runs. If no `rbw` command has
+executed this login session, GUI git will fail with `Couldn't find key in
+agent?` until you run something like `rbw unlock` once.
+
+In IntelliJ IDEs: **Settings → Version Control → Git** must be set to
+"Native" (not "Built-in"); the built-in JGit doesn't honor
+`gpg.format = ssh`.
 
 Add a confirmation prompt before every signature (guards against a running
 process silently signing commits while the agent is unlocked):

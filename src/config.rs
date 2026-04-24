@@ -21,6 +21,20 @@ pub struct Config {
     pub client_cert_path: Option<std::path::PathBuf>,
     #[serde(default)]
     pub ssh_confirm_sign: bool,
+    /// On macOS, controls how the master-password prompt is shown at
+    /// unlock time. Default `true` renders a native `CFUserNotification`
+    /// modal (works from daemonized contexts — ssh-sign, Finder-
+    /// launched GUI git, etc.). Set `false` to fall back to pinentry
+    /// if you prefer the terminal experience. No effect on other
+    /// platforms.
+    #[serde(default = "default_macos_unlock_dialog")]
+    pub macos_unlock_dialog: bool,
+    #[serde(
+        default,
+        with = "touchid_gate_serde",
+        skip_serializing_if = "is_touchid_gate_off"
+    )]
+    pub touchid_gate: crate::touchid::Gate,
     // backcompat, no longer generated in new configs
     #[serde(skip_serializing)]
     pub device_id: Option<String>,
@@ -40,6 +54,8 @@ impl Default for Config {
             pinentry: default_pinentry(),
             client_cert_path: None,
             ssh_confirm_sign: false,
+            macos_unlock_dialog: default_macos_unlock_dialog(),
+            touchid_gate: crate::touchid::Gate::Off,
             device_id: None,
         }
     }
@@ -55,6 +71,36 @@ pub fn default_sync_interval() -> u64 {
 
 pub fn default_pinentry() -> String {
     "pinentry".to_string()
+}
+
+pub const fn default_macos_unlock_dialog() -> bool {
+    cfg!(target_os = "macos")
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_touchid_gate_off(g: &crate::touchid::Gate) -> bool {
+    matches!(g, crate::touchid::Gate::Off)
+}
+
+mod touchid_gate_serde {
+    use std::str::FromStr as _;
+
+    use serde::{Deserialize as _, Deserializer, Serializer};
+
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub fn serialize<S: Serializer>(
+        g: &crate::touchid::Gate,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&g.to_string())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<crate::touchid::Gate, D::Error> {
+        let s = String::deserialize(d)?;
+        crate::touchid::Gate::from_str(&s).map_err(serde::de::Error::custom)
+    }
 }
 
 impl Config {

@@ -251,6 +251,47 @@ enum Opt {
     SshAllowedSigners,
 
     #[command(
+        name = "ssh-socket",
+        about = "Print the filesystem path of rbw-agent's ssh-agent socket",
+        long_about = "Print the filesystem path of rbw-agent's ssh-agent \
+            socket, suitable for export to `SSH_AUTH_SOCK`. Honors \
+            `RBW_PROFILE` and `XDG_RUNTIME_DIR`."
+    )]
+    SshSocket,
+
+    #[command(
+        name = "touchid",
+        about = "Manage macOS Touch ID enrollment (macOS only)"
+    )]
+    TouchId {
+        #[command(subcommand)]
+        cmd: TouchIdCmd,
+    },
+
+    #[command(
+        name = "setup-macos",
+        about = "Install the rbw-agent LaunchAgent + set SSH_AUTH_SOCK \
+            for GUI apps (macOS only)",
+        long_about = "One-shot macOS environment setup. Writes a \
+            LaunchAgent plist that exports `SSH_AUTH_SOCK` to the \
+            current login session at every login, so Finder/Spotlight-\
+            launched GUI apps (IDEs, git clients) see rbw-agent's ssh \
+            socket. Also runs `launchctl setenv` for the current \
+            session so existing GUI apps can be Cmd-Q'd and relaunched \
+            without a logout."
+    )]
+    SetupMacos {
+        #[arg(long, help = "Overwrite any existing LaunchAgent file")]
+        force: bool,
+    },
+
+    #[command(
+        name = "teardown-macos",
+        about = "Uninstall what `rbw setup-macos` created (macOS only)"
+    )]
+    TeardownMacos,
+
+    #[command(
         name = "gen-completions",
         about = "Generate completion script for the given shell"
     )]
@@ -258,6 +299,30 @@ enum Opt {
 }
 
 impl Opt {
+    /// Human-readable context surfaced in Touch ID / pinentry prompts on
+    /// the agent side. Where a single argument uniquely identifies the
+    /// target (the needle for `get`/`code`/`edit`/etc.) we include it.
+    fn purpose(&self) -> String {
+        match self {
+            Self::Get { find_args, .. }
+            | Self::Code { find_args, .. }
+            | Self::Edit { find_args }
+            | Self::Remove { find_args }
+            | Self::History { find_args }
+            | Self::SshPublicKey { find_args } => {
+                format!("rbw {} {}", self.subcommand_name(), find_args.needle)
+            }
+            Self::Search { term, .. } => format!("rbw search {term}"),
+            Self::Add { name, .. }
+            | Self::Generate {
+                name: Some(name), ..
+            } => {
+                format!("rbw {} {name}", self.subcommand_name())
+            }
+            _ => format!("rbw {}", self.subcommand_name()),
+        }
+    }
+
     fn subcommand_name(&self) -> String {
         match self {
             Self::Config { config } => {
@@ -282,6 +347,12 @@ impl Opt {
             Self::StopAgent => "stop-agent".to_string(),
             Self::SshPublicKey { .. } => "ssh-public-key".to_string(),
             Self::SshAllowedSigners => "ssh-allowed-signers".to_string(),
+            Self::SshSocket => "ssh-socket".to_string(),
+            Self::TouchId { cmd } => {
+                format!("touchid {}", cmd.subcommand_name())
+            }
+            Self::SetupMacos { .. } => "setup-macos".to_string(),
+            Self::TeardownMacos => "teardown-macos".to_string(),
             Self::GenCompletions { .. } => "gen-completions".to_string(),
         }
     }
@@ -297,9 +368,42 @@ enum CompletionShell {
 }
 
 #[derive(Debug, clap::Parser)]
+enum TouchIdCmd {
+    #[command(
+        about = "Enroll the current vault under a Touch ID-gated Keychain \
+            wrapper key"
+    )]
+    Enroll,
+    #[command(
+        about = "Remove the Touch ID enrollment (Keychain item + blob)"
+    )]
+    Disable,
+    #[command(about = "Show the current Touch ID enrollment status")]
+    Status,
+}
+
+impl TouchIdCmd {
+    fn subcommand_name(&self) -> &'static str {
+        match self {
+            Self::Enroll => "enroll",
+            Self::Disable => "disable",
+            Self::Status => "status",
+        }
+    }
+}
+
+#[derive(Debug, clap::Parser)]
 enum Config {
-    #[command(about = "Show the values of all configuration settings")]
-    Show,
+    #[command(
+        about = "Show configuration settings",
+        long_about = "Without arguments, print all configuration \
+            settings as JSON. With a key argument, print just that \
+            key's current value in plain text."
+    )]
+    Show {
+        #[arg(help = "Configuration key to read (omit to dump all)")]
+        key: Option<String>,
+    },
     #[command(about = "Set a configuration option")]
     Set {
         #[arg(help = "Configuration key to set")]
@@ -317,7 +421,7 @@ enum Config {
 impl Config {
     fn subcommand_name(&self) -> String {
         match self {
-            Self::Show => "show",
+            Self::Show { .. } => "show",
             Self::Set { .. } => "set",
             Self::Unset { .. } => "unset",
         }
@@ -331,9 +435,10 @@ fn main() {
     rbw::logger::init("info");
 
     let subcommand_name = opt.subcommand_name();
+    actions::set_purpose(opt.purpose());
     let res = match opt {
         Opt::Config { config } => match config {
-            Config::Show => commands::config_show(),
+            Config::Show { key } => commands::config_show(key.as_deref()),
             Config::Set { key, value } => commands::config_set(&key, &value),
             Config::Unset { key } => commands::config_unset(&key),
         },
@@ -463,6 +568,17 @@ fn main() {
             find_args.ignorecase,
         ),
         Opt::SshAllowedSigners => commands::ssh_allowed_signers(),
+        Opt::SshSocket => {
+            commands::ssh_socket();
+            Ok(())
+        }
+        Opt::TouchId { cmd } => match cmd {
+            TouchIdCmd::Enroll => commands::touchid_enroll(),
+            TouchIdCmd::Disable => commands::touchid_disable(),
+            TouchIdCmd::Status => commands::touchid_status(),
+        },
+        Opt::SetupMacos { force } => commands::setup_macos(force),
+        Opt::TeardownMacos => commands::teardown_macos(),
         Opt::GenCompletions { shell } => {
             match shell {
                 CompletionShell::Bash => {

@@ -62,12 +62,30 @@ impl ssh_agent_lib::agent::Session for SshAgent {
         let pubkey =
             ssh_agent_lib::ssh_key::PublicKey::new(request.pubkey, "");
 
+        // Find the key first so we can name it in the Touch ID / confirm
+        // prompts. The decrypt cost is small compared to the user-
+        // perceived benefit of knowing which key is being used.
         let (private_key, entry_name) =
             crate::actions::find_ssh_private_key(self.state.clone(), pubkey)
                 .await
                 .map_err(|e| {
                     ssh_agent_lib::error::AgentError::Other(e.into())
                 })?;
+
+        let gate = rbw::config::Config::load()
+            .map_or(rbw::touchid::Gate::Off, |c| c.touchid_gate);
+        if rbw::touchid::gate_applies(gate, rbw::touchid::Kind::SshSign) {
+            let ok = rbw::touchid::require_presence(&format!(
+                "rbw-agent: sign with SSH key {entry_name:?}"
+            ))
+            .await
+            .map_err(|e| ssh_agent_lib::error::AgentError::Other(e.into()))?;
+            if !ok {
+                return Err(ssh_agent_lib::error::AgentError::Other(
+                    "signature declined by Touch ID".into(),
+                ));
+            }
+        }
 
         // Optional confirm-on-sign. Reads both the config flag and the
         // last-known pinentry environment from the shared state.
