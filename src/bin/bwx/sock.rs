@@ -2,10 +2,9 @@ use std::io::{BufRead as _, Write as _};
 
 use crate::bin_error::{self, ContextExt as _};
 
-/// Cap on the size of a single JSON-line response from the agent. 16 MiB
-/// is far beyond any real vault-entry payload; this just blocks a
-/// runaway or malicious agent from pushing the CLI into unbounded
-/// heap growth.
+/// Cap on the size of a single JSON-line response from the agent. Blocks
+/// a runaway or malicious agent from pushing the CLI into unbounded heap
+/// growth.
 const MAX_MESSAGE: u64 = 16 * 1024 * 1024;
 
 pub struct Sock(std::os::unix::net::UnixStream);

@@ -1,7 +1,5 @@
-//! Verifies that bwx writes its on-disk state with tight Unix modes.
-//! Regression test for `SECURITY_AUDIT.md` items M1/M2 — those fixes are
-//! easy to undo accidentally (e.g. swapping `OpenOptions` back to
-//! `File::create`) and the mode bits are invisible outside of `ls -l`.
+//! Regression test for `SECURITY_AUDIT.md` items M1/M2: bwx must write its
+//! on-disk state with tight Unix modes (config 0o600, dirs 0o700).
 
 use crate::common::{register_user, BwxHarness};
 use crate::skip_if_no_vaultwarden;
@@ -18,14 +16,11 @@ fn sensitive_files_and_dirs_have_tight_modes() {
 
     let harness = BwxHarness::new(&server, email, password);
     harness.login_and_unlock();
-    // Put something in the vault so db.json exists on disk.
+    // Put something in the vault so the cache db file exists on disk.
     harness.run_with_stdin(&["add", "perms.example"], b"pw\n\n\n");
     harness.check(&["sync"]);
 
-    // Resolve bwx's on-disk roots from the harness env. The harness
-    // points `XDG_CONFIG_HOME` / `XDG_DATA_HOME` at tempdir children
-    // on Linux; macOS bwx ignores XDG and uses `$HOME/Library/...`
-    // regardless.
+    // macOS bwx ignores XDG and uses `$HOME/Library/...`; Linux follows XDG.
     let env: std::collections::HashMap<_, _> = harness
         .cmd()
         .get_envs()
@@ -42,9 +37,8 @@ fn sensitive_files_and_dirs_have_tight_modes() {
     } else {
         get("XDG_CONFIG_HOME").join("bwx")
     };
-    // db cache lives in `cache_dir` (XDG_CACHE_HOME on Linux,
-    // `~/Library/Caches/bwx` on macOS), not `data_dir`. Its filename
-    // is `<server>:<email>.json`.
+    // db cache lives in `cache_dir`, not `data_dir`; filename is
+    // `<server>:<email>.json`.
     let cache_abs = if cfg!(target_os = "macos") {
         get("HOME").join("Library/Caches/bwx")
     } else {
@@ -63,15 +57,11 @@ fn sensitive_files_and_dirs_have_tight_modes() {
         );
     };
 
-    // Trigger a bwx-driven `Config::save()` so we verify bwx's writer
-    // enforces 0o600 even if some earlier process (here: the harness
-    // itself) pre-created config.json with a looser mode.
+    // Trigger a bwx-driven `Config::save()` so the assertion exercises bwx's
+    // writer rather than the harness's pre-created config.json mode.
     harness.check(&["config", "set", "lock_timeout", "1800"]);
 
-    // Sensitive files must be 0o600 regardless of caller umask.
     check_mode(&cfg_abs.join("config.json"), 0o600);
-    // db cache filename is `<urlencoded-server>:<email>.json`. Find via
-    // a directory scan so we don't have to reconstruct the slug.
     let db_file = std::fs::read_dir(&cache_abs)
         .unwrap_or_else(|e| panic!("read {}: {e}", cache_abs.display()))
         .filter_map(Result::ok)
@@ -87,8 +77,6 @@ fn sensitive_files_and_dirs_have_tight_modes() {
         });
     check_mode(&db_file, 0o600);
 
-    // Enclosing dirs should be 0o700. bwx::dirs::make_all() creates
-    // these during startup.
     check_mode(&cfg_abs, 0o700);
     check_mode(&cache_abs, 0o700);
 }

@@ -176,7 +176,7 @@ fn test_hkdf_expand_sha256_rfc5869_a2() {
 #[test]
 fn test_hkdf_expand_sha256_rfc5869_a3() {
     // RFC 5869 Appendix A.3 — empty info (salt was empty upstream too;
-    // we only exercise the Expand step here).
+    // only the Expand step is exercised here).
     let prk: [u8; 32] = [
         0x19, 0xef, 0x24, 0xa3, 0x2c, 0x71, 0x7b, 0x16, 0x7f, 0x33, 0xa9,
         0x1d, 0x6f, 0x64, 0x8b, 0xdf, 0x96, 0x59, 0x67, 0x76, 0xaf, 0xdb,

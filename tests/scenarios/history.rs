@@ -19,13 +19,12 @@ fn edit_writes_history_entry() {
     let out = harness.run_with_stdin(&["edit", "rotate.me"], b"pw-v2\n\n\n");
     assert!(out.status.success(), "edit failed");
 
-    // history prints `<timestamp>: <previous password>` per entry.
+    // `history` prints `<timestamp>: <previous password>` per entry.
     let hist = harness.check(&["history", "rotate.me"]);
     assert!(
         hist.lines().any(|l| l.trim_end().ends_with(": pw-v1")),
         "expected pw-v1 in history; got:\n{hist}"
     );
-    // Current value should not appear in the history output.
     assert!(
         !hist.contains("pw-v2"),
         "current password leaked into history output; got:\n{hist}"

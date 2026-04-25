@@ -20,12 +20,10 @@ pub enum Type {
 
 /// Generate a password into a `locked::Password`.
 ///
-/// The result is mlocked + zeroized on drop, so the caller-facing copy
-/// never sits in ordinary heap memory. Note that any downstream code
-/// that clones the value into a plain `String` (e.g. the rmpv-encoded
-/// `Action::Encrypt` payload sent over the agent socket) reintroduces
-/// that exposure — this function only eliminates it in the immediate
-/// caller's scope.
+/// The result is mlocked + zeroized on drop. Downstream code that clones
+/// the value into a plain `String` (e.g. the rmpv-encoded `Action::Encrypt`
+/// payload sent over the agent socket) reintroduces heap exposure; this
+/// function only eliminates it in the immediate caller's scope.
 pub fn pwgen(ty: Type, len: usize) -> locked::Password {
     let mut rng = rand::rng();
 
@@ -76,7 +74,7 @@ fn diceware(rng: &mut impl rand::RngCore, len: usize) -> locked::Password {
     let mut buf = locked::Vec::new();
     buf.extend(joined.as_bytes().iter().copied());
     // The intermediate `String` held the full passphrase in plain heap;
-    // scrub it before it drops.
+    // scrub before drop.
     joined.zeroize();
     locked::Password::new(buf)
 }

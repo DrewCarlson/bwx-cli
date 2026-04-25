@@ -89,9 +89,9 @@ arboard = { version = "3.6.1", default-features = false, features = [
 ], optional = true }
 
 # Integration tests (`tests/e2e.rs`) only use crates already present in
-# `[dependencies]`, so no new crates are introduced here. The entries below
-# exist so that the test binary links against them explicitly rather than
-# relying on transitive re-exports from the `bwx` library crate.
+# `[dependencies]`. The entries below exist so the test binary links
+# against them explicitly rather than relying on transitive re-exports
+# from the `bwx` library crate.
 [dev-dependencies]
 tempfile = "3.24.0"
 reqwest = { version = "0.12.28", default-features = false, features = [
@@ -100,9 +100,10 @@ reqwest = { version = "0.12.28", default-features = false, features = [
     "rustls-tls-native-roots",
 ] }
 rsa = "0.9.9"
-# `rsa` 0.9 pulls in rand_core 0.6, which is compatible with the older `rand`
-# 0.8 shim we already keep in the main dep tree as `rand_8`. Re-declared here
-# so the test binary links against it without relying on transitive resolve.
+# `rsa` 0.9 pulls in rand_core 0.6, which is compatible with the older
+# `rand` 0.8 shim kept in the main dep tree as `rand_8`. Re-declared
+# here so the test binary links against it without relying on
+# transitive resolve.
 rand_8 = { package = "rand", version = "0.8.5" }
 base64 = "0.22.1"
 serde_json = "1.0.147"
@@ -184,8 +185,8 @@ assets = [
 ]
 
 # `cargo generate-rpm` reads this section. Mirrors the deb layout so
-# `dnf install ./bwx-cli-*.rpm` lands the same files the Debian package
-# would. `pinentry` is the Fedora package name as well.
+# `dnf install ./bwx-cli-*.rpm` lands the same files as the Debian
+# package. `pinentry` is the Fedora package name as well.
 [package.metadata.generate-rpm]
 license = "MIT"
 requires = { pinentry = "*" }

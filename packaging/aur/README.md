@@ -1,7 +1,7 @@
 # AUR packaging
 
 Two PKGBUILDs live here. They are *not* used by this repo's CI — they
-exist as the source of truth for what gets pushed to the
+are the source of truth for what gets pushed to the
 `aur.archlinux.org` git repos under the same names.
 
 ## One-time AUR account setup

@@ -1,6 +1,6 @@
 name: release
 
-# Triggered on a vN.N.N tag push. Builds the same binaries we test in
+# Triggered on a vN.N.N tag push. Builds the same binaries as
 # `tests.yaml`, then packages them as standalone tarballs (always),
 # `.deb` (Linux glibc only), and `.rpm` (Linux glibc only). Everything
 # is attached to the GitHub Release for the tag.
@@ -9,7 +9,7 @@ on:
   push:
     tags:
       - 'v*'
-  # Manual trigger so we can dry-run the matrix without cutting a tag.
+  # Manual trigger to dry-run the matrix without cutting a tag.
   workflow_dispatch: {}
 
 permissions:
@@ -75,21 +75,20 @@ jobs:
       - name: Build release binaries
         run: cargo build --release --locked --target ${{ matrix.target }}
 
-      # Generated *before* the macOS signing step so we can still
-      # exec the binary to drive `gen-completions`. After signing
-      # with hardened runtime + a `keychain-access-groups`
-      # entitlement, AMFI rejects the binary on first exec
-      # (CDHash isn't yet known to Apple), so a `--version` check
-      # would `Killed: 9`. Completions are pure text and target-
-      # independent — generating them now is safe.
+      # Generated *before* the macOS signing step so the binary is
+      # still execable to drive `gen-completions`. After signing with
+      # hardened runtime + a `keychain-access-groups` entitlement, AMFI
+      # rejects the binary on first exec (CDHash isn't yet known to
+      # Apple), so a `--version` check would `Killed: 9`. Completions
+      # are pure text and target-independent.
       - name: Generate shell completions
         run: |
           mkdir -p target/${{ matrix.target }}/release/completion
           BWX=target/${{ matrix.target }}/release/bwx
           # On cross-compiled or different-arch matrix entries the
           # target binary won't exec on this host (different libc /
-          # arch) — fall back to a host build purely for the
-          # completion generation pass.
+          # arch) — fall back to a host build for completion
+          # generation.
           if ! "$BWX" --version >/dev/null 2>&1; then
             cargo build --release --bin bwx
             BWX=target/release/bwx
@@ -109,9 +108,8 @@ jobs:
           MACOS_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_CERT_PASSWORD }}
         run: |
           set -euo pipefail
-          # Random password just for the temporary keychain — this
-          # keychain is destroyed at job-end, so it never leaves the
-          # runner.
+          # Random password for the temporary keychain; destroyed at
+          # job-end so it never leaves the runner.
           KEYCHAIN_PW="$(openssl rand -hex 16)"
           KEYCHAIN_PATH="$RUNNER_TEMP/bwx-signing.keychain-db"
           P12_PATH="$RUNNER_TEMP/bwx-developer-id.p12"
@@ -127,7 +125,7 @@ jobs:
           # key without a GUI prompt.
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PW" "$KEYCHAIN_PATH"
-          # Prepend our keychain to the search list so `find-identity`
+          # Prepend the keychain to the search list so `find-identity`
           # in sign-macos.sh sees it.
           security list-keychains -d user -s "$KEYCHAIN_PATH" \
             $(security list-keychains -d user | tr -d '"')
@@ -166,7 +164,7 @@ jobs:
           cargo generate-rpm --target ${{ matrix.target }} --output dist/
 
       # ---- macOS notarization ----
-      # Submit the signed binaries to Apple's Notary Service via
+      # Submits the signed binaries to Apple's Notary Service via
       # `notarytool` with an App Store Connect API key. For bare CLI
       # binaries inside a tarball there's nothing to staple — the
       # notarization ticket is recorded server-side and Gatekeeper
@@ -186,15 +184,14 @@ jobs:
           # notarytool only accepts .zip / .pkg / .dmg as upload
           # containers, but the notarization ticket is bound to the
           # individual binaries' hashes — not the container format.
-          # So: bundle the signed binaries into an ephemeral .zip,
-          # submit that to Apple, then throw the zip away. The
-          # original .tar.gz that users download still passes
-          # Gatekeeper because the binaries inside it match the
-          # hashes Apple just notarized.
+          # Bundle the signed binaries into an ephemeral .zip, submit
+          # that to Apple, then discard the zip. The original .tar.gz
+          # users download still passes Gatekeeper because the
+          # binaries inside it match the notarized hashes.
           zip_path="$RUNNER_TEMP/bwx-notarize-${{ matrix.target }}.zip"
           # `zip -j` flattens paths so the archive contains just the
-          # two signed Mach-O files at the top level — exactly what
-          # notarytool wants to inspect.
+          # two signed Mach-O files at the top level, which is what
+          # notarytool inspects.
           /usr/bin/zip -j "$zip_path" \
             "target/${{ matrix.target }}/release/bwx" \
             "target/${{ matrix.target }}/release/bwx-agent"
@@ -261,7 +258,7 @@ jobs:
       # ---- SLSA build provenance attestation (sigstore-backed) ----
       # Records an in-toto SLSA provenance statement for every
       # artifact, signed with this workflow's GitHub OIDC identity
-      # and recorded in the rekor transparency log. Users verify with
+      # and recorded in the rekor transparency log. Verified with
       # `gh attestation verify <file> --repo …`.
       - name: Attest build provenance for all release artifacts
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
@@ -311,9 +308,9 @@ jobs:
 
           # Extract the CHANGELOG section for this release. Prefer a
           # section that matches the *exact* tag version (so a
-          # prerelease can have its own per-rc notes if you wrote
-          # them), then fall back to the base version's section.
-          # Stops at the next `## [` heading.
+          # prerelease can have its own per-rc notes), then fall back
+          # to the base version's section. Stops at the next `## [`
+          # heading.
           extract_section() {
             awk -v ver="$1" '
               $0 ~ "^## \\[" ver "\\]" { found=1; print; next }
@@ -345,7 +342,7 @@ jobs:
 
           # Order matters when "Immutable Releases" is on: assets can
           # only be uploaded while the release is still a draft, and
-          # publishing is the lock-in step. So:
+          # publishing is the lock-in step:
           #   1. create (or revert to) draft
           #   2. upload all assets
           #   3. flip --draft=false to publish + freeze
@@ -355,8 +352,9 @@ jobs:
           if gh release view "$tag" --json isDraft -q .isDraft 2>/dev/null \
               | grep -qx 'false'; then
             # Already published from a prior run — under Immutable
-            # Releases we can't demote back to draft to re-upload, so
-            # treat the prior run as authoritative and exit success.
+            # Releases the release can't be demoted back to draft to
+            # re-upload, so treat the prior run as authoritative and
+            # exit success.
             echo "::notice::release $tag is already published (immutable); skipping re-upload"
             exit 0
           fi

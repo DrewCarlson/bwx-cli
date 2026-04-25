@@ -5,7 +5,7 @@ name: homebrew-bump
 # (macOS arm64/x86_64, Linux musl arm64/x86_64), rewrites the formula
 # template, opens a PR against the shared tap repo
 # (`DrewCarlson/homebrew-tap`), and enables auto-merge so the new
-# version goes live as soon as any tap-side checks pass.
+# version ships as soon as any tap-side checks pass.
 
 on:
   workflow_run:
@@ -24,7 +24,7 @@ on:
 
 jobs:
   bump:
-    # Run on every manual dispatch, and on workflow_run only when
+    # Runs on every manual dispatch, and on workflow_run only when
     # the upstream `release` job succeeded for a `v*` tag.
     if: >
       github.event_name == 'workflow_dispatch' ||
@@ -57,8 +57,8 @@ jobs:
           fi
           ver="${tag#v}"
           # Skip prereleases — `brew install` resolves to the stable
-          # release; bumping the formula on every rc would point users
-          # at unstable tarballs.
+          # release; bumping the formula on every rc would point
+          # users at unstable tarballs.
           if [ "$ver" != "${ver%%-*}" ]; then
             echo "::notice::skipping prerelease tag $tag"
             echo "skip=1" >> "$GITHUB_OUTPUT"
@@ -132,8 +132,8 @@ jobs:
           git config user.name  "bwx-cli release bot"
           git config user.email "bwx-cli-release-bot@users.noreply.github.com"
 
-          # Branch — start fresh from main even on re-runs so the PR
-          # always reflects the latest tap state.
+          # Start fresh from main even on re-runs so the PR always
+          # reflects the latest tap state.
           git checkout -B "$branch" origin/main
 
           mkdir -p Formula
@@ -187,7 +187,7 @@ jobs:
           # wait for) GitHub refuses with
           # "Protected branch rules not configured for this branch" —
           # fall back to an immediate squash in that case. Any other
-          # failure surfaces as a warning so the PR is left open.
+          # failure surfaces as a warning, leaving the PR open.
           merge_log="$RUNNER_TEMP/merge.log"
           if gh pr merge --repo "$TAP_REPO" --squash --auto "$branch" \
                2>"$merge_log"; then

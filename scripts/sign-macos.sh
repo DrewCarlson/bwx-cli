@@ -7,11 +7,12 @@
 #   3. "Apple Development: …"                (free, Xcode auto-provisioned)
 #   4. ad-hoc (`-`)                          (no cert; cargo-install users)
 #
-# Tiers 2 and 3 also sign an entitlements plist declaring a
+# Tier 2 also signs an entitlements plist declaring a
 # `keychain-access-groups` entry scoped to the signing identity's team
-# ID. That unlocks the biometric-ACL Keychain path at runtime. Tier 4
-# falls through to the plain-Keychain path; Touch ID enforcement lives
-# in the agent's `require_presence` call rather than in the item ACL.
+# ID. That unlocks the biometric-ACL Keychain path at runtime. Tiers 3
+# and 4 fall through to the plain-Keychain path; Touch ID enforcement
+# lives in the agent's `require_presence` call rather than in the item
+# ACL.
 #
 # Usage:
 #   ./scripts/sign-macos.sh                  # sign ~/.cargo/bin/bwx{,-agent}
@@ -31,7 +32,7 @@ pick_identity() {
   # that can carry a `keychain-access-groups` entitlement without a
   # provisioning profile. Apple Development certs *can* sign, but the
   # entitlement would only work inside a `.app` bundle with an
-  # embedded profile, so we sign those plain (no entitlement) —
+  # embedded profile, so they get signed plain (no entitlement) —
   # identical in effect to ad-hoc for bwx's purposes.
   pick="$(printf "%s" "$ids" | grep 'Developer ID Application' | head -1 \
            | sed -nE 's/.*"(.+)".*/\1/p')"
@@ -48,10 +49,6 @@ extract_team_id() {
 }
 
 IDENTITY_STR="$(pick_identity)"
-# Only Developer ID Application signatures get the
-# keychain-access-groups entitlement. Apple Development + ad-hoc go
-# through the plain-Keychain path (Touch ID prompt enforced by bwx-
-# agent's own LAContext call rather than by the item ACL).
 case "$IDENTITY_STR" in
   "Developer ID Application"*) USE_ENTITLEMENTS=1 ;;
   *)                           USE_ENTITLEMENTS=0 ;;
@@ -85,12 +82,11 @@ fi
 echo "signing mode: $IDENTITY_STR (biometric-ACL Keychain path)"
 
 # `HARDENED_RUNTIME=1` opts the binary into Apple's hardened runtime
-# (`codesign --options runtime`), required for notarization. We also
-# add the `allow-unsigned-executable-memory` entitlement so AMFI
-# doesn't kill the Rust binary on first run — Rust's allocator + a
-# few crates touch executable pages in ways the strict default
-# rejects. Local dev (no env var) skips both, matching the previous
-# behaviour.
+# (`codesign --options runtime`), required for notarization. The
+# `allow-unsigned-executable-memory` entitlement is also added so AMFI
+# doesn't kill the Rust binary on first run — Rust's allocator + a few
+# crates touch executable pages in ways the strict default rejects.
+# Local dev (no env var) skips both.
 ENTITLEMENTS="$(mktemp -t bwx-entitlements).plist"
 trap "rm -f '$ENTITLEMENTS'" EXIT
 if [ "${HARDENED_RUNTIME:-0}" = "1" ]; then

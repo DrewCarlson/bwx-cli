@@ -13,9 +13,8 @@ fn add_list_get() {
     let harness = BwxHarness::new(&server, email, password);
     harness.login_and_unlock();
 
-    // `bwx add <name>` reads the new password from stdin when stdin is not a
-    // tty. Format matches what `parse_editor` expects: first line password,
-    // blank line, notes body.
+    // `bwx add <name>` reads from stdin when stdin is not a tty: first line
+    // password, blank line, then notes body (the `parse_editor` grammar).
     let out = harness
         .run_with_stdin(&["add", "example.com"], b"hunter2\n\nnote line 1\n");
     assert!(

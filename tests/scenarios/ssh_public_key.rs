@@ -8,7 +8,6 @@ use crate::skip_if_no_vaultwarden;
 fn ssh_public_key_roundtrips() {
     let server = skip_if_no_vaultwarden!();
 
-    // Generate a throwaway ed25519 keypair.
     let tmp = tempfile::tempdir().expect("tempdir");
     let key_path = tmp.path().join("id_ed25519");
     let status = std::process::Command::new("ssh-keygen")
@@ -52,7 +51,6 @@ fn ssh_public_key_roundtrips() {
     harness.login_and_unlock();
     harness.check(&["sync"]);
 
-    // Primary command: print the stored OpenSSH public key.
     let got = harness.check(&["ssh-public-key", "git.signer"]);
     assert_eq!(
         got.trim(),
@@ -60,7 +58,6 @@ fn ssh_public_key_roundtrips() {
         "ssh-public-key output doesn't match uploaded key"
     );
 
-    // allowed_signers listing includes the email + matching pubkey.
     let signers = harness.check(&["ssh-allowed-signers"]);
     let line = signers
         .lines()
@@ -84,7 +81,6 @@ fn ssh_public_key_rejects_non_ssh_entry() {
     let harness = BwxHarness::new(&server, email, password);
     harness.login_and_unlock();
 
-    // A regular Login entry is not an SSH key.
     harness
         .run_with_stdin(&["add", "not.a.key"], b"pw\n\n\n")
         .status

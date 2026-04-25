@@ -1,9 +1,6 @@
-//! The on-disk cache (`db_*.json`) must only hold CipherString-wrapped
-//! values — never raw plaintext. A subtle serialization bug could
-//! cause a decrypted password or note to leak into the cache (and then
-//! into any backup system that slurps up the user's data dir). Assert
-//! that a password we just stored is *not* greppable in the db file,
-//! while the ciphertext envelope markers (`"2.<iv>|<ct>|<mac>"`) are.
+//! The on-disk cache must only hold CipherString-wrapped values — never raw
+//! plaintext. Asserts a stored password is not greppable in the db file
+//! while ciphertext envelope markers (`"2.…"`) are.
 
 use crate::common::{register_user, BwxHarness};
 use crate::skip_if_no_vaultwarden;
@@ -19,8 +16,7 @@ fn db_file_contains_ciphertext_not_plaintext() {
     let harness = BwxHarness::new(&server, email, password);
     harness.login_and_unlock();
 
-    // Use a password marker distinctive enough that we can grep for it
-    // in the db file without false positives.
+    // Distinctive marker so a grep against the db file has no false positives.
     let marker = "Z3ZmUGUhOk9wQG0xMjM0IE1BUktFUg==";
     harness.run_with_stdin(
         &["add", "dbcrypt.target"],
@@ -28,9 +24,6 @@ fn db_file_contains_ciphertext_not_plaintext() {
     );
     harness.check(&["sync"]);
 
-    // Locate db_*.json under the harness data dir. bwx resolves this
-    // dir from `XDG_DATA_HOME` on Linux and `$HOME/Library/…` on
-    // macOS; the harness sets both, so we just read whichever applies.
     let env: std::collections::HashMap<_, _> = harness
         .cmd()
         .get_envs()
@@ -42,9 +35,9 @@ fn db_file_contains_ciphertext_not_plaintext() {
                 .unwrap_or_else(|| panic!("{k} not in harness env")),
         )
     };
-    // `bwx::dirs::db_file()` resolves under `cache_dir` — `XDG_CACHE_HOME`
-    // on Linux, `$HOME/Library/Caches/bwx` on macOS. The filename is
-    // `<urlencoded-server>:<email>.json` (no `db_` prefix).
+    // `bwx::dirs::db_file()` resolves under `cache_dir` (XDG_CACHE_HOME on
+    // Linux, `$HOME/Library/Caches/bwx` on macOS). Filename is
+    // `<urlencoded-server>:<email>.json`.
     let cache_dir = if cfg!(target_os = "macos") {
         get("HOME").join("Library/Caches/bwx")
     } else {
@@ -73,9 +66,9 @@ fn db_file_contains_ciphertext_not_plaintext() {
         "db file contains plaintext password marker {marker:?} — cache \
          encryption broken"
     );
-    // The Bitwarden AES-CBC-HMAC envelope is serialized as
-    // `"2.<iv>|<ct>|<mac>"`. Confirm at least one such value is present
-    // so the test fails loudly if the schema flips.
+    // Bitwarden AES-CBC-HMAC envelope serializes as `"2.<iv>|<ct>|<mac>"`;
+    // confirm at least one such value is present so the test fails loudly
+    // if the schema flips.
     assert!(
         raw_str.contains("\"2."),
         "db file has no CipherString-looking values; got:\n{}",

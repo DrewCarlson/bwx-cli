@@ -1,33 +1,26 @@
-//! Native macOS secure-text prompt for the master password and other
-//! short inputs (2FA codes, etc.).
+//! Native macOS secure-text prompt for the master password and other short
+//! inputs (2FA codes, etc.).
 //!
-//! Shells out to `/usr/bin/osascript` with `display dialog` to render
-//! the modern Aqua system dialog (proper Apple-native buttons, shadow,
-//! rounded corners, automatic dark-mode theming). Unlike pinentry, it
-//! doesn't need a TTY or X11/DBus session; the dialog is rendered by
-//! `WindowServer` and will appear even for daemonized callers (GUI
-//! git signing, ssh-agent from a Finder-launched IDE).
-//!
-//! On non-macOS builds this module exposes the same function
-//! signature but returns an error, so callers can fall back to
-//! pinentry without cfg-guarding every call site.
+//! Shells out to `/usr/bin/osascript` with `display dialog`. Unlike pinentry
+//! it needs no TTY or X11/DBus session, so the dialog appears even for
+//! daemonized callers (GUI git signing, ssh-agent from a Finder-launched IDE).
+//! On non-macOS builds the function returns an error so callers can fall back
+//! to pinentry without cfg-guarding every call site.
 #![allow(clippy::doc_markdown)]
 
 use crate::locked;
 use crate::prelude::Error;
 
-/// Whether the dialog should mask typed characters. `Secret` → one-
-/// shot password dialog (bullets); `Visible` → plain text entry for
-/// 2FA codes / confirmation numbers.
+/// Whether the dialog should mask typed characters.
 #[derive(Copy, Clone, Debug)]
 pub enum InputKind {
     Secret,
     Visible,
 }
 
-/// Blocks the calling thread until the user dismisses the dialog.
-/// Callers should wrap in `tokio::task::spawn_blocking` to avoid
-/// stalling the tokio runtime.
+/// Blocks the calling thread until the user dismisses the dialog. Callers
+/// should wrap in `tokio::task::spawn_blocking` to avoid stalling the tokio
+/// runtime.
 pub fn prompt(
     title: &str,
     message: &str,
@@ -45,7 +38,6 @@ pub fn prompt(
     }
 }
 
-/// Back-compat shortcut for the original master-password call site.
 pub fn prompt_master_password(
     title: &str,
     message: &str,
@@ -61,10 +53,10 @@ mod imp {
 
     use super::{locked, Error, InputKind};
 
-    /// AppleScript double-quoted-string escape: backslash + double
-    /// quote. We never interpolate user-attacker-controlled strings
-    /// here, but harden anyway because the `title` and `message`
-    /// arguments are composed from profile names / error messages.
+    /// AppleScript double-quoted-string escape: backslash + double quote.
+    /// `title` and `message` are composed from profile names / error
+    /// messages, so escape even though no attacker-controlled input reaches
+    /// here today.
     fn escape(s: &str) -> String {
         let mut out = String::with_capacity(s.len() + 2);
         out.push('"');
@@ -112,9 +104,9 @@ mod imp {
                 stage: "osascript spawn",
             })?;
 
-        // Ensure the stdout buffer — which contains the typed password on
-        // the success path — is zeroed before `output` drops, regardless of
-        // which branch we leave by.
+        // Zero the stdout buffer (which contains the typed password on the
+        // success path) before `output` drops, regardless of which branch
+        // exits.
         let result = extract_password(&output);
         output.stdout.zeroize();
         output.stderr.zeroize();
@@ -137,8 +129,7 @@ mod imp {
 
         // osascript writes one line of the form
         //   "button returned:Unlock, text returned:<value>\n"
-        // to stdout. Find the text-returned marker and take everything
-        // after it (stripping the trailing newline).
+        // to stdout. Take everything after the text-returned marker.
         let Ok(stdout) = std::str::from_utf8(&output.stdout) else {
             return Err(Error::NativePromptFailed {
                 code: 0,

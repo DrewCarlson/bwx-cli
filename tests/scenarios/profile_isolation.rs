@@ -14,7 +14,6 @@ fn bwx_profile_isolates_state() {
 
     let harness = BwxHarness::new(&server, email, password);
 
-    // Populate the default profile.
     harness.login_and_unlock();
     harness
         .run_with_stdin(&["add", "profile.a.entry"], b"pw\n\n\n")
@@ -23,8 +22,7 @@ fn bwx_profile_isolates_state() {
         .then_some(())
         .expect("add in default profile failed");
 
-    // A command run under `BWX_PROFILE=other` sees a fresh, empty data dir.
-    // It won't even know which server to talk to — `bwx config show` is the
+    // `BWX_PROFILE=other` sees a fresh, empty data dir. `config show` is the
     // safest probe because it doesn't require the agent.
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_bwx"));
     cmd.env("BWX_PROFILE", "other")
@@ -38,8 +36,8 @@ fn bwx_profile_isolates_state() {
         .arg("show");
     let out = cmd.output().expect("spawn bwx under BWX_PROFILE=other");
 
-    // The alternate profile's config should not contain the default
-    // profile's email, proving state didn't bleed across.
+    // The alternate profile's config must not contain the default profile's
+    // email — proving state didn't bleed across.
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         !stdout.contains(email),

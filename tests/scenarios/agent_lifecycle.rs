@@ -13,7 +13,6 @@ fn stop_agent_then_next_command_restarts_it() {
     let harness = BwxHarness::new(&server, email, password);
     harness.login_and_unlock();
 
-    // Populate one entry, then stop the agent explicitly.
     harness
         .run_with_stdin(&["add", "pre.stop"], b"before\n\n\n")
         .status
@@ -26,9 +25,8 @@ fn stop_agent_then_next_command_restarts_it() {
         "stop-agent exited nonzero"
     );
 
-    // `bwx unlocked` requires the agent. First call should fail or succeed
-    // after auto-respawn; either way, a subsequent unlock must bring the
-    // vault back up and `get` must still work.
+    // After stop-agent, `unlock` must respawn the agent and `get` must
+    // still return the entry.
     harness.check(&["unlock"]);
     assert_eq!(
         harness.check(&["get", "pre.stop"]).trim_end(),

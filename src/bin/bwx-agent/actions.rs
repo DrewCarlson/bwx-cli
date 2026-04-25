@@ -1,13 +1,11 @@
 use crate::bin_error::{self, ContextExt as _};
 use sha2::Digest as _;
 
-/// Gate a pending sensitive response on a Touch ID prompt if the user has
-/// opted in. A `session_id` (assigned by the bwx CLI once per invocation)
-/// lets us coalesce the many `Decrypt`/`Encrypt` IPCs fired by a single
-/// `bwx <command>` into one prompt. Sessions expire after
-/// `TOUCHID_SESSION_TTL` of inactivity, and are flushed whenever the
-/// vault is locked. Cancelling the prompt returns a clean error. No
-/// behavior on non-macOS builds.
+/// Gate a pending sensitive response on a Touch ID prompt if the user
+/// has opted in. The CLI-assigned `session_id` coalesces the many
+/// `Decrypt`/`Encrypt` IPCs of one `bwx <command>` into one prompt.
+/// Sessions expire after `TOUCHID_SESSION_TTL` of inactivity and are
+/// flushed on lock. No-op on non-macOS.
 async fn enforce_touchid_gate(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     kind: bwx::touchid::Kind,
@@ -26,9 +24,9 @@ async fn enforce_touchid_gate(
             s.record_touchid_session(id);
             return Ok(());
         }
-        // Session not fresh. If we're enrolled, evict the in-memory keys
-        // so the "vault stays locked at rest" invariant holds — a new
-        // Touch ID prompt below will re-load them from Keychain.
+        // Session not fresh. If enrolled, evict in-memory keys so the
+        // "vault stays locked at rest" invariant holds — the Touch ID
+        // prompt below will re-load them from Keychain.
         #[cfg(target_os = "macos")]
         if bwx::touchid::blob::Blob::exists() {
             s.priv_key = None;
@@ -48,15 +46,14 @@ async fn enforce_touchid_gate(
             "request denied: Touch ID not confirmed",
         ));
     }
-    // If keys were evicted on session expiry above, transparently
-    // reload them from the Touch ID blob. The prompt the user just
-    // confirmed also authorizes this Keychain retrieval (same
-    // biometric session), so no double-prompt in practice.
+    // If keys were evicted on session expiry above, reload them from
+    // the Touch ID blob. The prompt just confirmed also authorizes the
+    // Keychain retrieval (same biometric session), so no double-prompt.
     //
-    // Record the session only *after* a successful unlock — if the
-    // unlock fails the user's biometric confirm didn't actually
-    // produce usable keys, so the next request should re-prompt
-    // rather than reuse this auth window.
+    // Record the session only after a successful unlock — a failed
+    // unlock means the biometric confirm didn't produce usable keys,
+    // and the next request should re-prompt rather than reuse this
+    // auth window.
     if state.lock().await.needs_unlock()
         && !try_unlock_via_touchid(state.clone()).await.is_unlocked()
     {
@@ -437,16 +434,10 @@ async fn login_success(
     Ok(())
 }
 
-/// Prompt the user for the master password. On macOS this defaults to
-/// a native secure dialog (works without a terminal — ideal for
-/// ssh-sign / GUI-triggered unlocks, and the only option when pinentry
-/// isn't installed); user can set `macos_unlock_dialog = false` to
-/// force pinentry. On other platforms this always goes through
-/// pinentry.
-///
-/// `title` is the dialog/pinentry header. `pinentry_desc` is what
-/// pinentry shows beneath it; the native dialog uses a longer auto-
-/// generated body that embeds the error context for retries.
+/// Prompt the user for the master password. On macOS defaults to a
+/// native secure dialog (works without a terminal — needed for ssh-sign
+/// and GUI-triggered unlocks); set `macos_unlock_dialog = false` to
+/// force pinentry. Other platforms always use pinentry.
 async fn prompt_master_password(
     title: &str,
     pinentry_desc: &str,
@@ -465,8 +456,8 @@ async fn prompt_master_password(
 
     if use_native {
         let title = title.to_string();
-        // osascript display dialog is synchronous / blocking; run on a
-        // blocking thread so we don't stall the tokio runtime.
+        // osascript display dialog is synchronous; run on a blocking
+        // thread so it doesn't stall the tokio runtime.
         match tokio::task::spawn_blocking(move || {
             bwx::pinentry_native::prompt_master_password(&title, &message)
         })
@@ -494,11 +485,9 @@ async fn prompt_master_password(
     .context("failed to read password from pinentry")
 }
 
-/// Prompt for a 2FA code. Goes through the native macOS dialog in
-/// visible-text mode (codes aren't secrets worth masking and the
-/// Yubikey/TOTP codes are short enough that users want to see them).
-/// Falls back to pinentry on non-macOS or when `macos_unlock_dialog`
-/// is off.
+/// Prompt for a 2FA code. Uses the native macOS dialog when available;
+/// falls back to pinentry on non-macOS or when `macos_unlock_dialog` is
+/// off.
 async fn prompt_two_factor_code(
     title: &str,
     message: &str,
@@ -540,7 +529,6 @@ async fn prompt_two_factor_code(
         .context("failed to read code from pinentry")
 }
 
-/// Convenience wrapper for the unlock path.
 async fn prompt_unlock_password(
     environment: &bwx::protocol::Environment,
     err: Option<&str>,
@@ -560,10 +548,10 @@ async fn unlock_state(
     environment: &bwx::protocol::Environment,
 ) -> bin_error::Result<()> {
     if state.lock().await.needs_unlock() {
-        // Prefer Touch ID-based unlock if the user has enrolled and the
-        // gate is active. Falls through to pinentry on cancel or error,
+        // Prefer Touch ID-based unlock if enrolled and the gate is
+        // active. Falls through to pinentry on cancel or error,
         // surfacing the reason in the first prompt so the user knows
-        // why the master password is suddenly being asked for.
+        // why the master password is being asked for.
         let touchid_hint = match try_unlock_via_touchid(state.clone()).await {
             TouchIdUnlockOutcome::Unlocked => return Ok(()),
             TouchIdUnlockOutcome::Fallback(reason) => Some(reason),
@@ -599,8 +587,8 @@ async fn unlock_state(
 
         let email = config_email().await?;
 
-        // Seed the retry loop with the Touch ID fallback reason (if any)
-        // so the first prompt explains why the user is seeing it.
+        // Seed the retry loop with the Touch ID fallback reason so the
+        // first prompt explains why the user is seeing it.
         let mut err_msg = touchid_hint.map(str::to_string);
         for i in 1_u8..=3 {
             let err = if i > 1 {
@@ -669,11 +657,10 @@ async fn unlock_success(
     Ok(())
 }
 
-/// Attempt to unlock the vault using the Touch ID-enrolled wrapper key.
-/// Outcome of an attempted Touch ID-backed unlock. The `Fallback`
-/// variants feed a human-readable hint into the caller's next prompt
-/// so the user knows why they're suddenly being asked for the master
-/// password instead of just seeing a Touch ID dialog.
+/// Outcome of an attempted Touch ID-backed unlock. `Fallback` carries a
+/// human-readable hint for the caller's next prompt so the user knows
+/// why they're being asked for the master password instead of seeing a
+/// Touch ID dialog.
 #[derive(Debug)]
 enum TouchIdUnlockOutcome {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -687,11 +674,10 @@ impl TouchIdUnlockOutcome {
     }
 }
 
-/// Attempt to unlock the vault using the Touch ID-enrolled wrapper
-/// key. Returns `Unlocked` on success. Returns `Fallback(reason)` when
-/// enrollment is absent, the gate is off, or the user cancelled /
-/// biometry was invalidated — the caller should then fall through to
-/// the pinentry path, optionally surfacing `reason` in the prompt.
+/// Attempt to unlock the vault using the Touch ID-enrolled wrapper key.
+/// Returns `Fallback(reason)` when enrollment is absent, the gate is
+/// off, or the user cancelled / biometry was invalidated — caller falls
+/// through to pinentry, optionally surfacing `reason` in the prompt.
 #[cfg(target_os = "macos")]
 async fn try_unlock_via_touchid(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
@@ -1129,7 +1115,7 @@ pub async fn touchid_enroll(
 ) -> bin_error::Result<()> {
     use rand::RngCore as _;
 
-    // Require an unlocked vault so we have keys to wrap.
+    // Require an unlocked vault so there are keys to wrap.
     {
         let s = state.lock().await;
         if s.needs_unlock() {
@@ -1140,10 +1126,9 @@ pub async fn touchid_enroll(
         }
     }
 
-    // Generate a random 64-byte wrapper seed. The buffer lives in a
-    // `locked::Vec` (mlocked + zeroized on drop) so the seed never sits
-    // in ordinary heap / stack memory that could be recovered from a
-    // core dump or swap.
+    // Random 64-byte wrapper seed in a `locked::Vec` (mlocked + zeroized
+    // on drop) so it never sits in ordinary heap/stack pages that could
+    // be recovered from a core dump or swap.
     let mut seed = bwx::locked::Vec::new();
     seed.extend(std::iter::repeat_n(0u8, 64));
     rand::rng().fill_bytes(seed.data_mut());
@@ -1182,7 +1167,7 @@ pub async fn touchid_enroll(
         (wrapped_priv, wrapped_org)
     };
 
-    // If a prior enrollment exists, remove it first — we're rotating.
+    // If a prior enrollment exists, remove it first (rotating).
     if let Ok(existing) = bwx::touchid::blob::Blob::load() {
         if let Err(e) =
             bwx::touchid::keychain::delete(&existing.keychain_label)
@@ -1393,12 +1378,9 @@ pub async fn get_ssh_public_keys(
     Ok(pubkeys)
 }
 
-/// Encrypted handle to an SSH entry that matched the requested pubkey.
-/// Holds the still-encrypted `private_key` cipherstring plus whatever
-/// envelope metadata we need to decrypt it later, after user
-/// confirmation. The plaintext private key is intentionally **not**
-/// pulled into memory here so a cancelled confirm leaves no key
-/// material on the heap.
+/// Encrypted handle to an SSH entry matching the requested pubkey. The
+/// plaintext private key is intentionally not pulled into memory here,
+/// so a cancelled user confirm leaves no key material on the heap.
 pub struct LocatedSshEntry {
     pub private_key_enc: String,
     pub entry_key: Option<String>,
@@ -1478,10 +1460,9 @@ pub async fn locate_ssh_private_key(
 }
 
 /// Second phase of the split SSH-sign flow: decrypt the private key
-/// cipherstring located by `locate_ssh_private_key`, only after the
-/// user has already confirmed Touch ID / pinentry CONFIRM. Callers
-/// must drop the returned `PrivateKey` as soon as the sign operation
-/// completes.
+/// cipherstring located by `locate_ssh_private_key`. Only call after the
+/// user has confirmed Touch ID / pinentry CONFIRM. Callers must drop the
+/// returned `PrivateKey` as soon as signing completes.
 pub async fn decrypt_located_ssh_private_key(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
     located: &LocatedSshEntry,

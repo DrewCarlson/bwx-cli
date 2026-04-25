@@ -27,8 +27,8 @@ itself the moment any tap-side checks pass.
 
 ## One-time setup (you, ~5 min)
 
-The tap repo already exists, so this is just secret + repo-setting
-flips on the source side.
+The tap repo already exists; this is just secret + repo-setting flips
+on the source side.
 
 ### a) Mint a fine-grained PAT for the bump workflow
 
@@ -94,8 +94,8 @@ version with no further intervention.
 
 ## Verifying a PR locally before merging
 
-If you want to sanity-check a release manually before letting
-auto-merge land it (e.g., after a major version bump):
+To sanity-check a release manually before letting auto-merge land it
+(e.g., after a major version bump):
 
 ```sh
 gh pr checkout <PR-number> --repo DrewCarlson/homebrew-tap
@@ -105,7 +105,7 @@ brew audit --strict --online bwx-cli
 brew uninstall bwx-cli   # leave no trace once you're done verifying
 ```
 
-`--build-from-source` here is a misnomer — for our binary-install
+`--build-from-source` here is a misnomer — for this binary-install
 formula it just downloads + verifies the tarball + sha256, then runs
 the `install` and `test` blocks. Catches any issue before it lands
 on real users.

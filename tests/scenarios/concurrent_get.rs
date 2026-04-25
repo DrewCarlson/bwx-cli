@@ -1,9 +1,5 @@
-//! Two `bwx get` invocations against the same agent, launched in
-//! parallel. The agent handles each incoming connection on its own
-//! task, so both must complete and return the correct plaintext. This
-//! catches regressions in the accept loop, state locking, or the
-//! Touch ID session bookkeeping that would serialize or drop
-//! simultaneous clients.
+//! Two parallel `bwx get` invocations against the same agent must both
+//! complete and return the correct plaintext.
 
 use std::process::Stdio;
 use std::thread;
@@ -25,11 +21,8 @@ fn parallel_gets_both_succeed() {
     harness.run_with_stdin(&["add", "conc.a"], b"pw-a\n\n\n");
     harness.run_with_stdin(&["add", "conc.b"], b"pw-b\n\n\n");
 
-    // Spawn the two child processes nearly-simultaneously via threads
-    // so they are more likely to collide on the agent's accept loop
-    // than if we launched them sequentially from the same thread.
-    // `thread::scope` lets the closures borrow `harness` without
-    // moving it.
+    // Spawn the two child processes near-simultaneously via threads so they
+    // collide on the agent's accept loop rather than running sequentially.
     let run_one = |name: &str| -> (std::process::ExitStatus, String) {
         let out = harness
             .cmd()

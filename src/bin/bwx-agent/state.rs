@@ -1,10 +1,8 @@
 use sha2::Digest as _;
 
 /// How long a Touch ID authorization remains valid for a given session
-/// before the agent will prompt again. Bumped on every access, so the
-/// window is "idle time," not a hard upper bound on the total command
-/// duration. 60 s is long enough for slow interactive commands and short
-/// enough that a backgrounded stale session can't be reused tomorrow.
+/// before the agent prompts again. Bumped on every access, so the window
+/// is idle time, not a hard upper bound on total command duration.
 const TOUCHID_SESSION_TTL: std::time::Duration =
     std::time::Duration::from_secs(60);
 
@@ -20,23 +18,22 @@ pub struct State {
     pub master_password_reprompt: std::collections::HashSet<[u8; 32]>,
     pub master_password_reprompt_initialized: bool,
 
-    /// Session tokens that have already cleared a Touch ID prompt, each
-    /// mapped to the last time we saw activity from that session. Bumped
-    /// on every authorized access so a long-running command doesn't time
-    /// out mid-execution. Cleared on `Lock`.
+    /// Session tokens that have cleared a Touch ID prompt, mapped to the
+    /// last time activity was seen on that session. Bumped on every
+    /// authorized access so a long-running command doesn't time out
+    /// mid-execution. Cleared on `Lock`.
     pub touchid_sessions:
         std::collections::HashMap<String, std::time::Instant>,
 
-    // this is stored here specifically for the use of the ssh agent, because
-    // requests made to the ssh agent don't include an environment, and so we
-    // can't properly initialize the pinentry process. we work around this by
-    // just reusing the last environment we saw being sent to the main agent
-    // (there should be at least one in most cases because you need to start
-    // the bwx agent in order to make it start serving on the ssh agent
-    // socket, and that initial request should come with an environment).
+    // stored here for the ssh agent, because requests made to the ssh
+    // agent don't include an environment, so the pinentry process can't
+    // be properly initialized. workaround: reuse the last environment
+    // seen by the main agent (there should be at least one in most
+    // cases, since starting the bwx agent is what brings up the ssh
+    // agent socket, and that initial request comes with an environment).
     //
-    // we should not use this for any requests on the main agent, those
-    // should all send their own environment over.
+    // should not be used for requests on the main agent, those should
+    // all send their own environment over.
     pub last_environment: bwx::protocol::Environment,
 
     #[cfg(feature = "clipboard")]
@@ -65,10 +62,9 @@ impl State {
         self.clear_touchid_sessions();
     }
 
-    /// Touch ID session cache helpers. A session with a still-fresh
-    /// timestamp (within `TOUCHID_SESSION_TTL`) may skip the biometric
-    /// prompt on subsequent requests within the same `bwx <command>`
-    /// invocation.
+    /// True if `session_id` has been recorded within
+    /// `TOUCHID_SESSION_TTL`; such sessions may skip the biometric
+    /// prompt on subsequent requests within the same `bwx <command>`.
     pub fn touchid_session_is_fresh(&self, session_id: &str) -> bool {
         self.touchid_sessions
             .get(session_id)

@@ -6,9 +6,8 @@ use crate::skip_if_no_vaultwarden;
 // RFC 6238 reference secret. Base32 of ASCII "12345678901234567890".
 const SECRET_B32: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 
-/// bwx's `add` CLI can't set the totp field directly. We upload the cipher
-/// via the vaultwarden API ourselves (simulating a web-vault client), then
-/// sync and ask bwx for a code.
+/// bwx's `add` CLI can't set the totp field, so the cipher is uploaded via
+/// the vaultwarden API directly before bwx syncs and reads the code.
 #[test]
 #[ignore = "requires vaultwarden binary; run with --ignored"]
 fn bwx_code_matches_handrolled_totp() {
@@ -43,9 +42,8 @@ fn bwx_code_matches_handrolled_totp() {
         "non-digit in TOTP code: {code:?}"
     );
 
-    // Compute the expected code directly. If bwx happened to run in the
-    // previous 30-second window (code is on a step boundary), accept either
-    // that window's code or this window's.
+    // Accept either the current or previous 30-second window in case bwx
+    // ran across a step boundary.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()

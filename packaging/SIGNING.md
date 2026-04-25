@@ -1,7 +1,7 @@
 # Release artifact signing & integrity
 
 Each tag triggers a release pipeline that produces signed,
-provenance-stamped artifacts. The integrity story has three layers:
+provenance-stamped artifacts. Three independent layers:
 
 | Layer                               | What it gives you                                                                                  |
 |-------------------------------------|----------------------------------------------------------------------------------------------------|
@@ -9,8 +9,7 @@ provenance-stamped artifacts. The integrity story has three layers:
 | Minisign signature                  | Project-owned ed25519 signature anyone can verify against the shipped pubkey                      |
 | Tag protection + Immutable Releases | Once published, the tag and release assets cannot be moved, deleted, or rewritten                 |
 
-Each layer is independent: any one of them is enough to detect an
-artifact swap, and verifying all three is cheap.
+Any one of them is enough to detect an artifact swap.
 
 ---
 
@@ -40,9 +39,8 @@ No setup required. Already on.
 
 ## Layer 2 — Minisign
 
-A traditional offline-signed signature anyone can verify with the
-single shipped public key. Friendlier for environments without `gh`
-installed.
+An offline-signed signature anyone can verify with the single shipped
+public key. Friendlier for environments without `gh` installed.
 
 ### One-time minisign setup
 
@@ -90,7 +88,7 @@ minisign -V -p packaging/minisign.pub -m bwx-cli_2.0.0_amd64.deb
    no-longer-trusted.
 
 SLSA attestations don't have this rotation pain — every signature is
-already tied to the workflow run's transient identity.
+tied to the workflow run's transient identity.
 
 ---
 

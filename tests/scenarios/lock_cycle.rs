@@ -13,18 +13,15 @@ fn lock_then_unlock_again() {
     let harness = BwxHarness::new(&server, email, password);
     harness.login_and_unlock();
 
-    // Populate one entry so we can verify the vault round-trips across locks.
     let out =
         harness.run_with_stdin(&["add", "before.lock"], b"pre-lock-pw\n\n\n");
     assert!(out.status.success(), "pre-lock add failed");
 
-    // unlocked exits 0 when the agent is unlocked.
     assert!(harness.run(&["unlocked"]).status.success());
 
-    // Lock: the vault should be sealed but the agent keeps running.
+    // Lock seals the vault but the agent keeps running.
     assert!(harness.run(&["lock"]).status.success(), "lock failed");
 
-    // After locking, `unlocked` should now exit nonzero.
     let u = harness.run(&["unlocked"]);
     assert!(
         !u.status.success(),
@@ -32,7 +29,6 @@ fn lock_then_unlock_again() {
         String::from_utf8_lossy(&u.stderr),
     );
 
-    // Re-unlock and verify the pre-existing entry is readable.
     harness.check(&["unlock"]);
     assert_eq!(
         harness.check(&["get", "before.lock"]).trim_end(),

@@ -141,8 +141,7 @@ async fn handle_request(
         }
         bwx::protocol::Action::Lock => {
             crate::actions::lock(sock, state.clone()).await?;
-            // Revoke all Touch ID authorizations so a future unlock forces
-            // a fresh biometric prompt.
+            // Revoke Touch ID authorizations so the next unlock prompts.
             state.lock().await.clear_touchid_sessions();
             false
         }

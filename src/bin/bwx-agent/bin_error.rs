@@ -1,7 +1,3 @@
-// Error type used by the bwx-agent binary. It provides both a simple
-// message variant and a "with context" variant that wraps another error,
-// roughly mimicking the anyhow API used previously.
-
 use std::fmt;
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;

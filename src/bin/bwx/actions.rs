@@ -2,18 +2,17 @@ use std::{io::Read as _, os::unix::ffi::OsStringExt as _};
 
 use crate::bin_error::{self, ContextExt as _};
 
-/// Per-CLI-process session identifier. Generated once on first access and
-/// attached to every outbound request so the agent can collapse a single
-/// `bwx <command>` invocation into one Touch ID prompt even when the
-/// command fires many `Decrypt`/`Encrypt` IPCs.
+/// Per-CLI-process session identifier. Attached to every outbound
+/// request so the agent can collapse a single `bwx <command>` invocation
+/// into one Touch ID prompt even when it fires many `Decrypt`/`Encrypt`
+/// IPCs.
 fn session_id() -> String {
     static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     ID.get_or_init(|| bwx::uuid::new_v4().to_string()).clone()
 }
 
-/// Human-readable command description surfaced to the user in biometric
-/// and pinentry prompts on the agent side. Set once at bwx startup from
-/// `main.rs`; read by `build_request` when each IPC is assembled.
+/// Human-readable command description surfaced in biometric and pinentry
+/// prompts on the agent side. Set once at startup from `main.rs`.
 static PURPOSE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 pub fn set_purpose(s: String) {

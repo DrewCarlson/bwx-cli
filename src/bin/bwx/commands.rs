@@ -1263,7 +1263,6 @@ pub fn config_show(key: Option<&str>) -> bin_error::Result<()> {
         return Ok(());
     };
 
-    // Per-key read. Kept in sync with the keys accepted by `config set`.
     match key {
         "email" => print_opt(config.email.as_deref()),
         "sso_id" => print_opt(config.sso_id.as_deref()),
@@ -1293,8 +1292,6 @@ fn print_opt(v: Option<&str>) {
     if let Some(s) = v {
         println!("{s}");
     }
-    // Unset keys print nothing (empty output) — callers can distinguish
-    // "unset" from "empty string" by exit code if needed.
 }
 
 pub fn config_set(key: &str, value: &str) -> bin_error::Result<()> {
@@ -2086,9 +2083,8 @@ pub fn touchid_enroll() -> bin_error::Result<()> {
 pub fn touchid_disable() -> bin_error::Result<()> {
     crate::actions::touchid_disable()?;
     println!("Touch ID enrollment removed.");
-    // Friendly reminder: `touchid_gate` and enrollment are orthogonal,
-    // so disabling enrollment doesn't stop per-operation prompts. Only
-    // mention it when the gate is still on.
+    // `touchid_gate` and enrollment are orthogonal; disabling enrollment
+    // doesn't stop per-operation prompts.
     let gate = bwx::config::Config::load()
         .map(|c| c.touchid_gate)
         .unwrap_or_default();
@@ -2101,10 +2097,6 @@ pub fn touchid_disable() -> bin_error::Result<()> {
     }
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// macOS first-run setup (LaunchAgent + session env)
-// ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
 const LAUNCHAGENT_LABEL: &str = "drews.website.bwx.ssh-auth-sock";
@@ -2215,11 +2207,11 @@ fn do_setup_macos(force: bool) -> bin_error::Result<()> {
         bin_error::Error::msg(format!("write {}: {e}", plist.display()))
     })?;
 
-    // Second LaunchAgent: keep bwx-agent running so that
-    // SSH_AUTH_SOCK points at a live socket at all times. launchd will
-    // respawn it if it crashes or exits after lock_timeout. Route
-    // stdio to files under the data dir so a crash-on-boot is
-    // debuggable without digging through `log show`.
+    // Second LaunchAgent: keep bwx-agent running so SSH_AUTH_SOCK points
+    // at a live socket at all times. launchd respawns it if it crashes
+    // or exits after lock_timeout. Route stdio to files under the data
+    // dir so a crash-on-boot is debuggable without digging through
+    // `log show`.
     let data_dir = bwx::dirs::agent_stdout_file().parent().map_or_else(
         || home.join(".cache/bwx"),
         std::path::Path::to_path_buf,
@@ -2254,9 +2246,9 @@ fn do_setup_macos(force: bool) -> bin_error::Result<()> {
     })?;
 
     let uid = rustix::process::getuid().as_raw();
-    // Unload any stale copies under the same labels. On first-time
-    // install there's nothing loaded, so bootout exits non-zero with
-    // "Boot-out failed: No such process" on stderr — expected, squelch.
+    // Unload any stale copies. On first-time install nothing is loaded,
+    // so bootout exits non-zero with "Boot-out failed: No such process";
+    // expected, squelch.
     for label in [LAUNCHAGENT_LABEL, AGENT_LAUNCHAGENT_LABEL] {
         let _ = std::process::Command::new("/bin/launchctl")
             .args(["bootout", &format!("gui/{uid}/{label}")])
@@ -2280,8 +2272,8 @@ fn do_setup_macos(force: bool) -> bin_error::Result<()> {
     }
 
     // Also set for the current session so the user doesn't have to log
-    // out. `bwx ssh-socket` is a cheap helper; invoke it via current_exe
-    // to avoid depending on PATH.
+    // out. Invoke `bwx ssh-socket` via current_exe to avoid depending on
+    // PATH.
     let socket = std::process::Command::new(&bwx_bin)
         .arg("ssh-socket")
         .output()

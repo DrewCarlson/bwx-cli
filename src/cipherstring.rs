@@ -203,8 +203,8 @@ impl CipherString {
     ) -> Result<crate::locked::Vec> {
         if let Self::Asymmetric { ciphertext } = self {
             // Padding was already stripped by decrypt_locked_symmetric when
-            // the private key was unwrapped; the stored bytes are raw PKCS#8
-            // DER at this point.
+            // the private key was unwrapped; stored bytes are raw PKCS#8
+            // DER.
             let privkey_data = private_key.private_key();
             let pkey = rsa::RsaPrivateKey::from_pkcs8_der(privkey_data)
                 .map_err(|source| Error::RsaPkcs8 { source })?;
@@ -214,7 +214,7 @@ impl CipherString {
 
             // XXX it'd be great if the rsa crate would let us decrypt
             // into a preallocated buffer directly to avoid the
-            // intermediate vec that needs to be manually zeroized, etc
+            // intermediate vec that needs to be manually zeroized
             let mut res = crate::locked::Vec::new();
             res.extend(bytes.iter().copied());
             bytes.zeroize();
@@ -245,8 +245,8 @@ fn decrypt_common_symmetric(
 
         // `verify_slice` uses `subtle::ConstantTimeEq` internally, which
         // compares byte-by-byte without short-circuiting. Using it
-        // explicitly (rather than a naive `==`) blocks MAC-verification
-        // timing oracles on crafted ciphertexts.
+        // explicitly (rather than `==`) blocks MAC-verification timing
+        // oracles on crafted ciphertexts.
         key.verify_slice(mac).map_err(|_| Error::InvalidMac)?;
     }
 

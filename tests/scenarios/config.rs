@@ -12,7 +12,6 @@ fn config_show_set_unset_roundtrip() {
 
     let harness = BwxHarness::new(&server, email, password);
 
-    // `config show` should surface the email we wrote via the harness.
     let shown = harness.check(&["config", "show"]);
     assert!(
         shown.contains(email),
@@ -23,7 +22,6 @@ fn config_show_set_unset_roundtrip() {
         "config show missing base_url; got:\n{shown}"
     );
 
-    // Set a new email, confirm, unset it, confirm it disappeared.
     let new_email = "rotated@example.test";
     harness.check(&["config", "set", "email", new_email]);
     let shown = harness.check(&["config", "show"]);

@@ -65,8 +65,8 @@ fn agent_stream(sock: &std::path::Path) -> std::os::unix::net::UnixStream {
     }
 }
 
-/// With `ssh_confirm_sign = true` and the fake pinentry auto-accepting the
-/// CONFIRM dialog, signing should still succeed end-to-end.
+/// With `ssh_confirm_sign = true` and the fake pinentry accepting CONFIRM,
+/// signing must succeed end-to-end.
 #[test]
 #[ignore = "requires vaultwarden binary; run with --ignored"]
 fn confirm_accept_allows_sign() {
@@ -108,8 +108,7 @@ fn confirm_accept_allows_sign() {
     assert_eq!(sig.as_bytes().len(), 64);
 }
 
-/// When the user cancels the CONFIRM dialog, sign must fail and no
-/// signature must be returned to the ssh client.
+/// When the user cancels the CONFIRM dialog, sign must fail.
 #[test]
 #[ignore = "requires vaultwarden binary; run with --ignored"]
 fn confirm_decline_blocks_sign() {
@@ -129,8 +128,7 @@ fn confirm_decline_blocks_sign() {
         upload_and_sync(&server, &harness, email, password, "deny.key");
 
     // Swap the pinentry so CONFIRM returns ERR. Subsequent pinentry spawns
-    // (including the one the agent kicks off for CONFIRM) pick up the new
-    // script on disk.
+    // pick up the new script on disk.
     harness.reject_confirm_prompts();
 
     let sock = harness.runtime_dir.join("bwx/ssh-agent-socket");

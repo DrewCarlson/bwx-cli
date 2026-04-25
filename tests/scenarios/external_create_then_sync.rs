@@ -3,9 +3,8 @@ use crate::common::{
 };
 use crate::skip_if_no_vaultwarden;
 
-/// Simulates a second client (e.g. the web vault) creating a cipher while
-/// bwx is logged in but unaware. After `bwx sync`, the entry should be
-/// visible locally and its decrypted fields should round-trip.
+/// Simulates a second client creating a cipher while bwx is logged in but
+/// unaware; after `bwx sync` the entry must be visible and its fields round-trip.
 #[test]
 #[ignore = "requires vaultwarden binary; run with --ignored"]
 fn external_cipher_shows_up_after_sync() {
@@ -18,7 +17,6 @@ fn external_cipher_shows_up_after_sync() {
     let harness = BwxHarness::new(&server, email, password);
     harness.login_and_unlock();
 
-    // Initially empty.
     assert!(
         harness.check(&["list"]).trim().is_empty(),
         "expected empty vault on first sync"
@@ -37,7 +35,7 @@ fn external_cipher_shows_up_after_sync() {
     )
     .expect("upload cipher");
 
-    // bwx has not synced yet — listing is still empty.
+    // bwx has not synced yet; listing is still empty.
     assert!(
         !harness
             .check(&["list"])

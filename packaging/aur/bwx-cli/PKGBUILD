@@ -12,7 +12,7 @@ makedepends=('cargo')
 provides=('bwx')
 conflicts=('bwx-cli-git')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-# Replace this `SKIP` with the real sha256 once the v2.0.0 tag is pushed.
+# Replace `SKIP` with the real sha256 once the tag is pushed.
 # Compute via:  curl -L $source | sha256sum
 sha256sums=('SKIP')
 
@@ -28,7 +28,6 @@ build() {
   export CARGO_TARGET_DIR=target
   cargo build --frozen --release --all-features
 
-  # Generate shell completions for packaging.
   install -d target/release/completion
   ./target/release/bwx gen-completions bash > target/release/completion/bash
   ./target/release/bwx gen-completions zsh  > target/release/completion/zsh
@@ -38,7 +37,7 @@ build() {
 check() {
   cd "$pkgname-$pkgver"
   # Skip the e2e/`#[ignore]` suite (it spawns vaultwarden); keep the
-  # unit + lib tests so packagers catch regressions.
+  # unit + lib tests for packagers to catch regressions.
   cargo test --frozen --release --lib
 }
 

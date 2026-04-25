@@ -1,9 +1,6 @@
-//! Large-payload roundtrip: a notes body that crosses several AES
-//! blocks and dwarfs the 4 KiB `locked::FixedVec` password buffer, to
-//! make sure nothing along the encrypt → serialize → IPC → deserialize
-//! → decrypt path caps or truncates entry bodies (notes flow through
-//! `String`, not `locked::Vec`, so this is strictly a sanity check on
-//! framing + cipherstring).
+//! Large-payload roundtrip: a notes body crossing many AES blocks and the
+//! 4 KiB `locked::FixedVec` boundary, to catch truncation in the encrypt /
+//! IPC / decrypt path.
 
 use std::fmt::Write as _;
 
@@ -22,12 +19,10 @@ fn large_notes_survive_roundtrip() {
     harness.login_and_unlock();
 
     // Vaultwarden's 10 000-char `notes` cap applies to the *encrypted*
-    // stored value (base64 of ciphertext + envelope ≈ 1.37× plaintext
-    // + ~80 B). To exercise many AES blocks and cross the
-    // `locked::FixedVec` 4 KiB boundary while staying comfortably
-    // under the server cap, we aim for ~5 KiB plaintext (→ ≈ 7 KiB
-    // encoded). A truncation bug surfaces as a missing `line 0099:`
-    // at the tail.
+    // stored value (base64 ciphertext+envelope ≈ 1.37× plaintext + ~80 B).
+    // Aim for ~5 KiB plaintext to cross the 4 KiB FixedVec boundary while
+    // staying under the server cap. A truncation bug surfaces as a missing
+    // `line 0099:` tail.
     let mut notes = String::new();
     for i in 0..100 {
         writeln!(notes, "line {i:04}: abcdefghijklmnopqrstuvwxyz0123456789")
@@ -53,8 +48,6 @@ fn large_notes_survive_roundtrip() {
     );
 
     let full = harness.check(&["get", "--full", "longnotes.example"]);
-    // First and last lines must both be present, and the count should
-    // match. Scan for "line 0000:" and "line 0255:" as bookends.
     assert!(
         full.contains("line 0000:"),
         "first notes line missing; got {} bytes",

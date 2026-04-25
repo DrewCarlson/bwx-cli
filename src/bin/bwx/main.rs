@@ -300,8 +300,8 @@ enum Opt {
 
 impl Opt {
     /// Human-readable context surfaced in Touch ID / pinentry prompts on
-    /// the agent side. Where a single argument uniquely identifies the
-    /// target (the needle for `get`/`code`/`edit`/etc.) we include it.
+    /// the agent side. Includes the needle when one argument uniquely
+    /// identifies the target.
     fn purpose(&self) -> String {
         match self {
             Self::Get { find_args, .. }

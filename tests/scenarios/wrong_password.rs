@@ -10,9 +10,8 @@ fn unlock_with_wrong_password_fails() {
     let password = "correct horse battery staple";
     register_user(&server, email, password).expect("register user");
 
-    // Construct the harness with a *different* master password than what was
-    // registered. bwx should log in (since login uses the real password via
-    // pinentry — we pass the wrong one) and unlock should fail.
+    // Harness configured with the *wrong* master password (pinentry returns
+    // it); login should fail.
     let harness = BwxHarness::new(&server, email, "totally wrong password");
 
     let out = harness.run(&["login"]);

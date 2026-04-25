@@ -13,7 +13,6 @@ fn generate_stores_entry_and_sync_is_idempotent() {
     let harness = BwxHarness::new(&server, email, password);
     harness.login_and_unlock();
 
-    // Generate a 24-char password for entry "gen.example"; verify it shows up.
     let gen_out = harness
         .check(&["generate", "24", "gen.example"])
         .trim_end()
@@ -30,15 +29,12 @@ fn generate_stores_entry_and_sync_is_idempotent() {
         "expected gen.example in listing:\n{listing}"
     );
 
-    // Round-trip through `get` matches what `generate` printed.
     let fetched = harness
         .check(&["get", "gen.example"])
         .trim_end()
         .to_string();
     assert_eq!(fetched, gen_out, "stored password differs from generated");
 
-    // Sync should be idempotent — running it twice from a clean state yields
-    // the same local view.
     let before = harness.check(&["list"]);
     harness.check(&["sync"]);
     let after = harness.check(&["list"]);
@@ -57,7 +53,7 @@ fn generate_respects_length_flags() {
     let harness = BwxHarness::new(&server, email, password);
     harness.login_and_unlock();
 
-    // `--only-numbers` (no name → don't store, just print)
+    // No name → print only, don't store.
     let digits = harness.check(&["generate", "--only-numbers", "16"]);
     let digits = digits.trim_end();
     assert_eq!(digits.len(), 16);
@@ -66,7 +62,6 @@ fn generate_respects_length_flags() {
         "--only-numbers returned non-digit chars: {digits:?}"
     );
 
-    // `--no-symbols` (alphanumeric only)
     let alnum = harness.check(&["generate", "--no-symbols", "32"]);
     let alnum = alnum.trim_end();
     assert_eq!(alnum.len(), 32);

@@ -57,10 +57,9 @@ async fn tokio_main(
 
     let ssh_agent = crate::ssh_agent::SshAgent::new(state.clone());
 
-    // Install a best-effort SIGTERM/SIGINT handler so keys in
-    // `State` are zeroized (via `Drop` on `locked::Vec`) before the
-    // process exits, rather than living in kernel buffers until the
-    // reaper gets around to reclaiming pages.
+    // SIGTERM/SIGINT handler so keys in `State` are zeroized (via `Drop`
+    // on `locked::Vec`) before exit, rather than living in pages until
+    // the reaper reclaims them.
     let shutdown_state = state.clone();
     tokio::select! {
         res = async { tokio::try_join!(agent.run(listener), ssh_agent.run()) } => {

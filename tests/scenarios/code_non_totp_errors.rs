@@ -1,7 +1,5 @@
-//! `bwx code` only makes sense on entries that have a TOTP secret. On
-//! a plain login entry (no TOTP), it should exit non-zero with a
-//! legible error, not panic, return an empty string, or leak anything
-//! sensitive to stdout.
+//! `bwx code` on a non-TOTP login entry must exit non-zero with a legible
+//! error and emit nothing on stdout.
 
 use crate::common::{register_user, BwxHarness};
 use crate::skip_if_no_vaultwarden;
@@ -35,8 +33,6 @@ fn code_on_login_without_totp_fails_cleanly() {
         stderr.contains("totp") || stderr.contains("code"),
         "expected a TOTP-related error message; got: {stderr}"
     );
-    // Belt-and-braces: the master password should never land in
-    // stderr/stdout even on error.
     assert!(
         !stderr.contains("secret-pw"),
         "error output leaked the stored password: {stderr}"

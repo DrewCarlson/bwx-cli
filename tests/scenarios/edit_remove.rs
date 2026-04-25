@@ -22,7 +22,7 @@ fn edit_then_remove() {
         "oldpass"
     );
 
-    // Edit rewrites the entry through stdin using the same parse_editor grammar.
+    // `edit` uses the same parse_editor grammar as `add`.
     let out = harness.run_with_stdin(
         &["edit", "login.example"],
         b"newpass\n\nnew notes\n",
@@ -43,7 +43,6 @@ fn edit_then_remove() {
         "expected 'new notes' in full output, got:\n{full}"
     );
 
-    // Remove + confirm it's gone.
     let out = harness.run(&["remove", "login.example"]);
     assert!(
         out.status.success(),

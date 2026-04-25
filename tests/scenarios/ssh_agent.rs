@@ -5,9 +5,8 @@ use crate::common::{
 };
 use crate::skip_if_no_vaultwarden;
 
-/// Generate an ed25519 keypair via the local `ssh-keygen` binary. Returns
-/// `(private_openssh, public_openssh_line, fingerprint)`. The test is
-/// skipped if `ssh-keygen` isn't on `$PATH`.
+/// Generate an ed25519 keypair via local `ssh-keygen`. Returns None if
+/// `ssh-keygen` isn't available so the caller can skip.
 fn generate_ed25519_key(
 ) -> Option<(tempfile::TempDir, String, String, String)> {
     let tmp = tempfile::tempdir().ok()?;
@@ -75,11 +74,8 @@ fn ssh_agent_lists_uploaded_key() {
     harness.login_and_unlock();
     harness.check(&["sync"]);
 
-    // bwx-agent binds an ssh-agent-protocol socket alongside its regular
-    // IPC socket. Path mirrors `bwx::dirs::ssh_agent_socket_file()`.
+    // ssh-agent socket path mirrors `bwx::dirs::ssh_agent_socket_file()`.
     let sock = harness.runtime_dir.join("bwx/ssh-agent-socket");
-    // The agent creates the socket lazily on first ssh-agent connection, so
-    // just checking for its existence is a probe, not a gate.
     let key_b64 = pub_openssh
         .split_whitespace()
         .nth(1)
@@ -105,11 +101,8 @@ fn ssh_agent_lists_uploaded_key() {
     );
 }
 
-/// Exercise the full sign path: connect to bwx-agent as an ssh client, ask
-/// for identities, request a signature over arbitrary data, verify the
-/// signature locally with the matching public key. Round-trip proves both
-/// the agent protocol wiring and that bwx can reconstruct the private key
-/// from the encrypted cipher field.
+/// Full sign path: connect to bwx-agent, request identities, sign, verify
+/// the signature locally with the matching public key.
 #[test]
 #[ignore = "requires vaultwarden binary; run with --ignored"]
 fn ssh_agent_signs_data_verifiable_by_pubkey() {
@@ -147,8 +140,7 @@ fn ssh_agent_signs_data_verifiable_by_pubkey() {
     harness.check(&["sync"]);
 
     let sock_path = harness.runtime_dir.join("bwx/ssh-agent-socket");
-    // The agent creates the ssh socket eagerly, but UnixStream::connect may
-    // race the first listen; retry for a moment.
+    // UnixStream::connect may race the agent's first listen; retry briefly.
     let stream = {
         let deadline =
             std::time::Instant::now() + std::time::Duration::from_secs(3);
@@ -184,7 +176,6 @@ fn ssh_agent_signs_data_verifiable_by_pubkey() {
         })
         .expect("sign");
 
-    // The signature should carry the ed25519 algorithm and a 64-byte body.
     assert_eq!(
         sig.algorithm().as_str(),
         "ssh-ed25519",

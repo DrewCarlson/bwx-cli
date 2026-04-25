@@ -1,8 +1,6 @@
-//! `bwx config set` must reject values that its key-specific parser
-//! can't handle, instead of silently coercing them to a default or a
-//! nonsensical state. Covers the two most security-relevant keys:
-//! `touchid_gate` (controls whether biometric prompts appear at all)
-//! and `ssh_confirm_sign` (controls the SSH-sign confirm dialog).
+//! `bwx config set` must reject values its key-specific parser can't handle
+//! rather than silently coercing them. Covers `touchid_gate` and
+//! `ssh_confirm_sign`.
 
 use crate::common::{register_user, BwxHarness};
 use crate::skip_if_no_vaultwarden;
@@ -24,7 +22,6 @@ fn bad_touchid_gate_and_bool_rejected() {
         "bad touchid_gate accepted; stdout={}",
         String::from_utf8_lossy(&out.stdout),
     );
-    // Config value shouldn't have changed.
     let gate_after = harness.check(&["config", "show", "touchid_gate"]);
     assert_eq!(gate_after.trim(), "off");
 

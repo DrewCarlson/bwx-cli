@@ -27,10 +27,9 @@ impl SshAgent {
 }
 
 /// Per-connection ssh-agent session. Carries a human-readable `peer`
-/// description (program name + pid) so the Touch ID / pinentry prompts
-/// tell the user *which* local client is requesting the signature,
-/// instead of the generic "bwx-agent wants to sign with …". The peer
-/// string is never used for authorization — it's diagnostic/UX only.
+/// description (program name + pid) shown in Touch ID / pinentry prompts
+/// so the user sees which local client is requesting a signature. Never
+/// used for authorization.
 #[derive(Clone)]
 pub struct SshSession {
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
@@ -38,8 +37,8 @@ pub struct SshSession {
 }
 
 // The blanket `Agent<UnixListener> for T: Session + Clone` shipped by
-// ssh-agent-lib only covers the concrete `UnixListener` type, so we
-// have to restate it for our filtered wrapper — otherwise `listen`
+// ssh-agent-lib only covers the concrete `UnixListener` type, so it has
+// to be restated here for the filtered wrapper — otherwise `listen`
 // can't resolve a session factory.
 impl ssh_agent_lib::agent::Agent<UidFilteredUnixListener> for SshAgent {
     fn new_session(
@@ -57,8 +56,8 @@ impl ssh_agent_lib::agent::Agent<UidFilteredUnixListener> for SshAgent {
 }
 
 /// Build a "`<program>` (pid `<pid>`)" description of the peer on a
-/// connected Unix-socket fd. Entirely best-effort: if any lookup fails
-/// we substitute an "unknown" placeholder.
+/// connected Unix-socket fd. Best-effort: substitutes an "unknown"
+/// placeholder if any lookup fails.
 fn describe_peer(fd: std::os::unix::io::RawFd) -> String {
     let Some(pid) = crate::sock::peer_pid(fd) else {
         return "unknown client".to_string();
@@ -82,12 +81,9 @@ fn peer_program_name(pid: i32) -> Option<String> {
 
 #[cfg(target_os = "macos")]
 fn peer_program_name(pid: i32) -> Option<String> {
-    // libc::proc_pidpath fills a caller-provided buffer with the
-    // executable's full path. Returns the number of bytes written, or
-    // a negative value on error.
     // `PROC_PIDPATHINFO_MAXSIZE` is Darwin-defined as 4 * `MAXPATHLEN`
-    // (= 4096); it fits in a `usize` but is typed `c_int`, so the
-    // widening needs an explicit allow for the `as_conversions` lint.
+    // (= 4096); typed `c_int`, so the widening to `usize` needs an
+    // explicit allow for the `as_conversions` lint.
     #[allow(clippy::as_conversions)]
     const BUF_LEN: usize = libc::PROC_PIDPATHINFO_MAXSIZE as usize;
     let mut buf = [0u8; BUF_LEN];
@@ -105,8 +101,6 @@ fn peer_program_name(pid: i32) -> Option<String> {
     }
     let n = usize::try_from(written).ok()?;
     let path = std::str::from_utf8(&buf[..n]).ok()?;
-    // Collapse to the basename for the prompt; the full path is
-    // noise most of the time.
     Some(
         std::path::Path::new(path)
             .file_name()
@@ -177,11 +171,11 @@ impl ssh_agent_lib::agent::Session for SshSession {
         let pubkey =
             ssh_agent_lib::ssh_key::PublicKey::new(request.pubkey, "");
 
-        // Phase 1: locate the matching entry and decrypt just the public
-        // key + entry name — enough to show the user a named prompt —
-        // while leaving the *private* key cipherstring encrypted. This
-        // way, if the user cancels Touch ID or pinentry CONFIRM below,
-        // no plaintext RSA / Ed25519 key material ever sits on the heap.
+        // Phase 1: locate the matching entry and decrypt only the public
+        // key + entry name (enough for a named prompt) while leaving the
+        // *private* key cipherstring encrypted. If the user cancels
+        // Touch ID or pinentry CONFIRM below, no plaintext private key
+        // material ever sits on the heap.
         let located = crate::actions::locate_ssh_private_key(
             self.state.clone(),
             pubkey,
@@ -208,12 +202,10 @@ impl ssh_agent_lib::agent::Session for SshSession {
             }
         }
 
-        // Optional confirm-on-sign via pinentry. Skipped entirely
-        // when the Touch ID gate already prompted for *this* sign —
-        // the biometric tap *is* the user's confirmation, so
-        // re-prompting via pinentry would be redundant (and would
-        // require pinentry to be installed and reachable, which
-        // isn't a given on macOS).
+        // Optional confirm-on-sign via pinentry. Skipped when the Touch
+        // ID gate already prompted for this sign — the biometric tap is
+        // the confirmation, and pinentry isn't guaranteed to be
+        // installed on macOS.
         let (confirm_required, pinentry, environment) = {
             let state = self.state.lock().await;
             let config = bwx::config::Config::load().map_err(|e| {
@@ -245,9 +237,8 @@ impl ssh_agent_lib::agent::Session for SshSession {
             }
         }
 
-        // User has confirmed. Decrypt the private key *now*, sign with
-        // it, and drop it at end-of-scope — plaintext key material is
-        // alive only for the narrow window of the signing operation.
+        // Decrypt the private key now, sign, and drop at end-of-scope —
+        // plaintext key material is alive only for the signing window.
         let private_key = crate::actions::decrypt_located_ssh_private_key(
             self.state.clone(),
             &located,

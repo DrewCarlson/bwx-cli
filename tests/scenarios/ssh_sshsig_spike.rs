@@ -1,10 +1,7 @@
-//! bwx-agent as the SSH signer for `ssh-keygen -Y sign` — the sshsig
-//! format git uses for commit/tag signing under `gpg.format = ssh`. The
-//! wire-level sign request is identical to plain ssh-agent signing: the
-//! caller wraps the payload in an sshsig preamble before handing it to the
-//! agent. This scenario exercises the user-facing recipe in the repo's
-//! `SPIKE_CODE_SIGNING.md`: fetch the pubkey + `allowed_signers` via bwx,
-//! sign through the agent, verify with `ssh-keygen -Y verify`.
+//! bwx-agent as SSH signer for `ssh-keygen -Y sign` (the sshsig format git
+//! uses under `gpg.format = ssh`). Exercises the recipe in
+//! `SPIKE_CODE_SIGNING.md`: pubkey + `allowed_signers` via bwx, sign via
+//! the agent, verify with `ssh-keygen -Y verify`.
 
 use std::process::Command;
 
@@ -18,7 +15,6 @@ use crate::skip_if_no_vaultwarden;
 fn bwx_agent_signs_sshsig_via_ssh_keygen() {
     let server = skip_if_no_vaultwarden!();
 
-    // Generate a throwaway ed25519 keypair locally.
     let tmp = tempfile::tempdir().expect("tempdir");
     let key_path = tmp.path().join("id_ed25519");
     let kg = Command::new("ssh-keygen")
@@ -59,10 +55,8 @@ fn bwx_agent_signs_sshsig_via_ssh_keygen() {
     harness.login_and_unlock();
     harness.check(&["sync"]);
 
-    // Point ssh-keygen at bwx-agent.
     let sock = harness.runtime_dir.join("bwx/ssh-agent-socket");
 
-    // Obtain the pubkey via `bwx ssh-public-key` — the user-facing recipe.
     let pub_from_bwx = harness.check(&["ssh-public-key", "git.signing.key"]);
     assert_eq!(
         pub_from_bwx.trim(),
@@ -76,8 +70,7 @@ fn bwx_agent_signs_sshsig_via_ssh_keygen() {
     std::fs::write(&message_path, b"signed by bwx-agent via sshsig\n")
         .unwrap();
 
-    // `ssh-keygen -Y sign -f pubkey -n namespace file` consults SSH_AUTH_SOCK
-    // for the matching private key and writes `file.sig` next to `file`.
+    // `ssh-keygen -Y sign` consults SSH_AUTH_SOCK and writes `file.sig`.
     let out = Command::new("ssh-keygen")
         .args(["-Y", "sign", "-f", pub_file.to_str().unwrap(), "-n", "git"])
         .arg(&message_path)
@@ -98,8 +91,7 @@ fn bwx_agent_signs_sshsig_via_ssh_keygen() {
         "not an sshsig-formatted signature:\n{sig}"
     );
 
-    // Verify the signature round-trips by using `-Y verify` against an
-    // allowed_signers file emitted by `bwx ssh-allowed-signers`.
+    // Verify with `-Y verify` against `bwx ssh-allowed-signers` output.
     let allowed = tmp.path().join("allowed_signers");
     std::fs::write(&allowed, harness.check(&["ssh-allowed-signers"]))
         .unwrap();

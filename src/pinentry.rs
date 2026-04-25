@@ -66,9 +66,8 @@ pub async fn confirm(
         .map_err(|source| Error::PinentryWait { source })?;
 
     // Three SETs + a CONFIRM. Accept => trailing "OK\n"; cancel => an ERR
-    // line (codes 83886179 or 83886194) after the SET lines' OKs. Treat
-    // any ERR line as "user said no" rather than surfacing it as a protocol
-    // failure, so callers just see a clean refusal.
+    // line (codes 83886179 or 83886194) after the SET lines' OKs. Any ERR
+    // line is treated as "user said no" rather than a protocol failure.
     let text = String::from_utf8_lossy(&out);
     let has_err = text
         .lines()
@@ -93,8 +92,8 @@ pub async fn getpin(
     }
 
     let env_vars = environment.env_vars();
-    // Not all pinentry appear to respect the --display flag, so we also keep the environment
-    // variable.
+    // Not all pinentry implementations respect the --display flag, so the
+    // environment variable is also kept.
     if let Some(display) =
         env_vars.get(std::ffi::OsString::from("DISPLAY").as_os_str())
     {
@@ -115,7 +114,7 @@ pub async fn getpin(
     opts.envs(env_vars);
 
     let mut child = opts.spawn().map_err(|source| Error::Spawn { source })?;
-    // unwrap is safe because we specified stdin as piped in the command opts
+    // unwrap is safe because stdin was specified as piped in the command opts
     // above
     let mut stdin = child.stdin.take().unwrap();
 
@@ -151,7 +150,7 @@ pub async fn getpin(
 
     let mut buf = crate::locked::Vec::new();
     buf.zero();
-    // unwrap is safe because we specified stdout as piped in the command opts
+    // unwrap is safe because stdout was specified as piped in the command opts
     // above
     let len = read_password(
         ncommands,
@@ -252,9 +251,9 @@ where
 }
 
 // not using the percent-encoding crate because it doesn't provide a way to do
-// this in-place, and we want the password to always live within the locked
-// vec. should really move something like this into the percent-encoding crate
-// at some point.
+// this in-place, and the password must always live within the locked vec.
+// should really move something like this into the percent-encoding crate at
+// some point.
 fn percent_decode(buf: &mut [u8]) -> usize {
     let mut read_idx = 0;
     let mut write_idx = 0;
@@ -267,7 +266,7 @@ fn percent_decode(buf: &mut [u8]) -> usize {
             if let Some(h) = char::from(buf[read_idx + 1]).to_digit(16) {
                 if let Some(l) = char::from(buf[read_idx + 2]).to_digit(16) {
                     // h and l were parsed from a single hex digit, so they
-                    // must be in the range 0-15, so these unwraps are safe
+                    // must be in the range 0-15, so these unwraps are safe.
                     c = u8::try_from(h).unwrap() * 0x10
                         + u8::try_from(l).unwrap();
                     read_idx += 2;

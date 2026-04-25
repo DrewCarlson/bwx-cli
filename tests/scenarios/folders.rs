@@ -13,8 +13,7 @@ fn add_into_folder_and_list_shows_it() {
     let harness = BwxHarness::new(&server, email, password);
     harness.login_and_unlock();
 
-    // Add an entry directly into a new folder. bwx auto-creates the folder
-    // server-side on first use.
+    // bwx auto-creates the folder server-side on first use.
     let out = harness.run_with_stdin(
         &["add", "work.login", "--folder", "Work"],
         b"workpw\n\n\n",
@@ -25,7 +24,6 @@ fn add_into_folder_and_list_shows_it() {
         String::from_utf8_lossy(&out.stderr),
     );
 
-    // `list --fields name,folder` groups folder per row.
     let listing = harness.check(&["list", "--fields", "name,folder"]);
     assert!(
         listing
@@ -34,7 +32,6 @@ fn add_into_folder_and_list_shows_it() {
         "expected 'work.login' + 'Work' on same row:\n{listing}"
     );
 
-    // `get --folder Work work.login` narrows find_entry to the folder.
     let got = harness
         .check(&["get", "--folder", "Work", "work.login"])
         .trim_end()

@@ -14,7 +14,6 @@ fn register_login_unlock_list() {
 
     let harness = BwxHarness::new(&server, email, password);
 
-    // `bwx login` — needs the pinentry to answer with the master password.
     let out = harness
         .cmd()
         .arg("login")
@@ -28,7 +27,6 @@ fn register_login_unlock_list() {
         String::from_utf8_lossy(&out.stderr),
     );
 
-    // `bwx unlock` — idempotent after login but we exercise it explicitly.
     let out = harness
         .cmd()
         .arg("unlock")
@@ -42,7 +40,6 @@ fn register_login_unlock_list() {
         String::from_utf8_lossy(&out.stderr),
     );
 
-    // `bwx list` — should succeed and emit nothing (brand new vault).
     let out = harness.cmd().arg("list").output().expect("spawn bwx list");
     assert!(
         out.status.success(),

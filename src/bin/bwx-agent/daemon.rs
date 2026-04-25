@@ -15,12 +15,11 @@ impl StartupAck {
     }
 }
 
-/// Open + flock the pidfile. If another agent already holds the lock,
-/// exit with code 23 instead of bubbling an error. This is the same
-/// "already running" signal the daemonized parent uses, but applied
-/// uniformly so that the `--no-daemonize` path (used by the launchd
-/// keepalive plist) doesn't spam its log with "failed to lock pid file"
-/// every time launchd respawns into a still-occupied slot.
+/// Open + flock the pidfile. If another agent holds the lock, exit with
+/// code 23 — the same "already running" signal the daemonized parent
+/// uses. Applied uniformly so the `--no-daemonize` path (used by the
+/// launchd keepalive plist) doesn't spam its log every time launchd
+/// respawns into a still-occupied slot.
 fn lock_pidfile_or_exit_if_running() -> bin_error::Result<std::fs::File> {
     match open_and_lock_pidfile() {
         Ok(f) => Ok(f),

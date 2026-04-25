@@ -1,10 +1,9 @@
 //! Biometric-gated Keychain storage for bwx's Touch ID wrapper key.
 //!
 //! The high-level `security-framework` crate doesn't expose
-//! `SecAccessControl`, so we drop down to `core-foundation` +
-//! `security-framework-sys` and build the query dictionaries
-//! directly. That's the only way to attach a
-//! `kSecAccessControlBiometryCurrentSet` ACL.
+//! `SecAccessControl`, so this drops down to `core-foundation` +
+//! `security-framework-sys` and builds the query dictionaries directly —
+//! the only way to attach a `kSecAccessControlBiometryCurrentSet` ACL.
 #![allow(
     clippy::borrow_as_ptr,
     clippy::as_conversions,
@@ -41,10 +40,10 @@ use security_framework_sys::keychain_item::{
 // singleton CFStringRefs from Security.framework resolved by the system
 // linker.
 //
-// `SecTaskCreateFromSelf` + `SecTaskCopyValueForEntitlement` let us
-// read our own code-signing entitlements at runtime so we can branch
-// on whether the binary was signed with a `keychain-access-groups`
-// entitlement (see `access_group_from_entitlement`).
+// `SecTaskCreateFromSelf` + `SecTaskCopyValueForEntitlement` read this
+// binary's code-signing entitlements at runtime, used to branch on whether
+// it was signed with a `keychain-access-groups` entitlement (see
+// `access_group_from_entitlement`).
 #[link(name = "Security", kind = "framework")]
 unsafe extern "C" {
     static kSecUseOperationPrompt: CFStringRef;
@@ -63,9 +62,9 @@ unsafe extern "C" {
 }
 
 /// Returns `Some("<team>.bwx")` if this binary is code-signed with a
-/// `keychain-access-groups` entitlement (Apple Development or Developer
-/// ID tier). Returns `None` for ad-hoc / unsigned binaries; those use
-/// the plain Keychain path (no ACL, no access group).
+/// `keychain-access-groups` entitlement. Returns `None` for ad-hoc /
+/// unsigned binaries; those use the plain Keychain path (no ACL, no access
+/// group).
 fn access_group_from_entitlement() -> Option<String> {
     use core_foundation::array::CFArray;
     use core_foundation::base::TCFType as _;
@@ -93,14 +92,14 @@ fn access_group_from_entitlement() -> Option<String> {
     }
 }
 
-/// True iff we're running with a `keychain-access-groups` entitlement,
-/// in which case we upgrade to biometric ACL + access group.
+/// True iff running with a `keychain-access-groups` entitlement, in which
+/// case the Keychain item is upgraded to biometric ACL + access group.
 pub fn have_biometric_entitlement() -> bool {
     access_group_from_entitlement().is_some()
 }
 
-/// Keychain generic-password `service` value. All bwx Touch ID items
-/// share this, with per-enrollment labels distinguishing them.
+/// Keychain generic-password `service` value shared by all bwx Touch ID
+/// items; per-enrollment labels distinguish them.
 const SERVICE: &str = "bwx";
 
 #[derive(Debug)]
@@ -132,13 +131,11 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Store `secret` under the given label. On signed builds (Apple
-/// Development or Developer ID) we attach a
-/// `kSecAccessControlBiometryCurrentSet` ACL + team-scoped access group
-/// so the Keychain itself enforces biometry on retrieval. On ad-hoc /
-/// unsigned builds the Keychain item is plain (only protected by
-/// `WhenUnlockedThisDeviceOnly`) and our `require_presence` call is
-/// what forces the Touch ID prompt.
+/// Store `secret` under the given label. On entitled signed builds, attaches
+/// a `kSecAccessControlBiometryCurrentSet` ACL + team-scoped access group so
+/// the Keychain enforces biometry on retrieval. On ad-hoc / unsigned builds
+/// the item is plain (`WhenUnlockedThisDeviceOnly` only); the separate
+/// `require_presence` call forces the Touch ID prompt.
 pub fn store(label: &str, secret: &[u8]) -> Result<(), Error> {
     unsafe {
         let service = CFString::new(SERVICE);
@@ -195,8 +192,8 @@ pub fn store(label: &str, secret: &[u8]) -> Result<(), Error> {
 ///
 /// Blocks until the user approves Touch ID; cancelling returns
 /// `Error::UserCancelled`. If the biometric enrollment has changed since
-/// this item was written, macOS returns an "authentication failed"
-/// error which we map to `Error::Invalidated`.
+/// the item was written, macOS returns an "authentication failed" error,
+/// mapped to `Error::Invalidated`.
 pub fn load(label: &str, prompt: &str) -> Result<crate::locked::Vec, Error> {
     unsafe {
         let service = CFString::new(SERVICE);
@@ -239,10 +236,9 @@ pub fn load(label: &str, prompt: &str) -> Result<crate::locked::Vec, Error> {
         match status {
             s if s == errSecSuccess && !result.is_null() => {
                 let data = CFData::wrap_under_create_rule(result as *mut _);
-                // Copy the CFData bytes directly into a locked (mlocked +
-                // zeroized-on-drop) buffer. Never materialize a plain
-                // `Vec<u8>` that would linger on the heap after this
-                // function returns.
+                // Copy CFData bytes directly into a locked (mlocked +
+                // zeroized-on-drop) buffer; avoid a plain `Vec<u8>` that
+                // would linger on the heap after this function returns.
                 let mut buf = crate::locked::Vec::new();
                 buf.extend(data.bytes().iter().copied());
                 Ok(buf)
@@ -334,8 +330,8 @@ pub fn exists(label: &str) -> Result<bool, Error> {
     }
 }
 
-/// Build a `SecAccessControlRef` with biometry-current-set + unlocked-
-/// this-device-only. Only used on the signed-with-entitlement path.
+/// Build a `SecAccessControlRef` with biometry-current-set +
+/// unlocked-this-device-only. Only used on the entitled-signed path.
 unsafe fn create_biometric_access_control(
 ) -> Result<*mut std::ffi::c_void, Error> {
     let mut err: CFErrorRef = std::ptr::null_mut();

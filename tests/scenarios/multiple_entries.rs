@@ -37,7 +37,6 @@ fn many_entries_listed_and_fetched() {
         assert_eq!(got, format!("pw-{i}"), "wrong password for {name}");
     }
 
-    // `bwx search` should match a substring.
     let search = harness.check(&["search", "beta"]);
     assert!(
         search.lines().any(|l| l.trim() == "beta.site"),

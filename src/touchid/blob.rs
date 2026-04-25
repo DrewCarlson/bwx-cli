@@ -1,9 +1,8 @@
 //! On-disk wrapper blob for Touch ID-enrolled vault keys.
 //!
 //! Written by `bwx touchid enroll`, read by the agent on unlock. Holds
-//! `CipherString`-wrapped vault keys + the Keychain label whose item
-//! holds the wrapping key. The wrapping key itself never touches
-//! disk; only the encrypted blob does.
+//! `CipherString`-wrapped vault keys + the Keychain label of the wrapping
+//! key. The wrapping key itself never touches disk.
 #![allow(clippy::doc_markdown)]
 
 use crate::locked;
@@ -18,15 +17,13 @@ pub struct Blob {
     /// Main vault key (64 bytes = 32 enc + 32 mac), wrapped with the
     /// Keychain-held wrapper key.
     pub wrapped_priv_key: String,
-    /// Per-organization 64-byte symmetric keys, each wrapped the same
-    /// way.
+    /// Per-organization 64-byte symmetric keys, each wrapped the same way.
     pub wrapped_org_keys: std::collections::BTreeMap<String, String>,
 }
 
 impl Blob {
     pub fn path() -> std::path::PathBuf {
         crate::dirs::make_all().ok();
-        // Stash under the data dir — same place agent.err etc. live.
         data_dir_for_blob().join(FILENAME)
     }
 
@@ -91,8 +88,7 @@ impl Blob {
 }
 
 fn data_dir_for_blob() -> std::path::PathBuf {
-    // Re-use the XDG data dir that already holds agent.err, agent.out,
-    // device_id, etc.
+    // Reuse the data dir that holds agent.err, agent.out, device_id, etc.
     let p = crate::dirs::agent_stdout_file();
     p.parent().map_or_else(
         || std::path::PathBuf::from("."),
@@ -101,7 +97,7 @@ fn data_dir_for_blob() -> std::path::PathBuf {
 }
 
 /// Derive a 64-byte wrapping `Keys` from a random 64-byte seed. The
-/// Keychain stores this seed; at use time we wrap it in a `locked::Keys`
+/// Keychain stores the seed; at use time it is wrapped in a `locked::Keys`
 /// for the existing `CipherString` APIs.
 pub fn keys_from_wrapper_seed(seed: &[u8]) -> locked::Keys {
     assert_eq!(seed.len(), 64, "wrapper seed must be 64 bytes");

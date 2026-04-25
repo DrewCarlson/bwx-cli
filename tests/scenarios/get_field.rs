@@ -13,7 +13,7 @@ fn get_field_selects_specific_field() {
     let harness = BwxHarness::new(&server, email, password);
     harness.login_and_unlock();
 
-    // Entry with an explicit username so we can fetch `user` via --field.
+    // Explicit username so `--field user` has something to return.
     let out = harness
         .run_with_stdin(&["add", "field.example", "alice"], b"pw\n\n\n");
     assert!(

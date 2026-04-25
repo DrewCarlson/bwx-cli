@@ -8,8 +8,8 @@
 #   ./scripts/install.sh --root /some/prefix   # any cargo-install flag
 #   IDENTITY="Developer ID Application: …" ./scripts/install.sh
 #
-# Run this instead of raw `cargo install` whenever you want the Touch ID
-# feature to actually work on macOS.
+# Use this instead of raw `cargo install` for the Touch ID feature to
+# work on macOS.
 set -eu
 
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -18,8 +18,8 @@ cd "$DIR"
 cargo install --path . --locked --force "$@"
 
 if [ "$(uname -s)" = "Darwin" ]; then
-  # Respect `--root` so we sign binaries in whichever prefix cargo just
-  # installed to; otherwise default to ~/.cargo/bin.
+  # Respect `--root` so binaries get signed in whichever prefix cargo
+  # just installed to; otherwise default to ~/.cargo/bin.
   bin_dir="$HOME/.cargo/bin"
   prev=""
   for arg in "$@"; do

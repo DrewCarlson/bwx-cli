@@ -13,7 +13,7 @@ fn get_by_uri_finds_entry() {
     let harness = BwxHarness::new(&server, email, password);
     harness.login_and_unlock();
 
-    // Add with --uri. bwx persists the URL on the entry's uris array.
+    // bwx persists --uri on the entry's uris array.
     let out = harness.run_with_stdin(
         &["add", "site.example", "--uri", "https://site.example/login"],
         b"sitepw\n\n\n",
@@ -24,8 +24,8 @@ fn get_by_uri_finds_entry() {
         String::from_utf8_lossy(&out.stderr),
     );
 
-    // `parse_needle` tries URL-parse first; a full URL becomes a Needle::Uri
-    // and find_entry searches the uris array.
+    // `parse_needle` URL-parses first: a full URL becomes Needle::Uri and
+    // find_entry searches the uris array.
     let got = harness
         .check(&["get", "https://site.example/login"])
         .trim_end()

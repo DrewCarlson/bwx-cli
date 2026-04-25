@@ -6,15 +6,15 @@ static MLOCK_WORKS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 /// RAII guard around `mlock`/`munlock`. `munlock` can spuriously fail with
 /// `ENOMEM` on musl under `RLIMIT_MEMLOCK` pressure (common in CI
-/// containers); the pages are already released on process exit, so a
-/// best-effort unlock is fine — never panic on drop.
+/// containers); pages are released on process exit anyway, so unlock is
+/// best-effort and never panics on drop.
 struct MlockGuard {
     ptr: *mut core::ffi::c_void,
     len: usize,
 }
 
-// The guard only tracks an address + length we own for the lifetime of the
-// owning `FixedVec`; it's safe to move across threads.
+// The guard only tracks an address + length owned for the lifetime of the
+// owning `FixedVec`; safe to move across threads.
 unsafe impl Send for MlockGuard {}
 unsafe impl Sync for MlockGuard {}
 
@@ -28,8 +28,8 @@ impl Drop for MlockGuard {
 }
 
 fn try_mlock(ptr: *const u8, len: usize) -> rustix::io::Result<MlockGuard> {
-    // rustix takes *mut c_void; mlock doesn't mutate, but the POSIX
-    // signature is *mut.
+    // rustix takes *mut c_void to match the POSIX signature, even though
+    // mlock doesn't mutate.
     let p = ptr.cast::<core::ffi::c_void>().cast_mut();
     // SAFETY: `ptr` points to a live allocation of at least `len` bytes
     // owned by the caller.
@@ -194,8 +194,7 @@ impl Keys {
         &self.keys.data()[32..64]
     }
 
-    /// Full 64-byte `enc_key` || `mac_key` buffer. Used by Touch ID
-    /// enroll to wrap the vault keys into a `CipherString`.
+    /// Full 64-byte `enc_key` || `mac_key` buffer.
     pub fn as_bytes(&self) -> &[u8] {
         &self.keys.data()[0..64]
     }
@@ -284,19 +283,12 @@ mod tests {
 
     #[test]
     fn fixed_vec_drop_zeros_written_bytes() {
-        // FixedVec::Drop must zeroize the written region. We can't
-        // observe the memory after drop directly, so instead we verify
-        // that calling the Drop impl via an explicit scope leaves the
-        // destination (on the stack-allocated data array) zeroed by
-        // peeking at the internal array just before drop. We do this
-        // by reimplementing the manual path: new -> extend -> manually
-        // invoke drop via scope exit on a wrapper that lets us see
-        // `data` after zeroize. We observe via `data` field which is
-        // pub(super) to tests already.
+        // FixedVec::Drop must zeroize the written region. The memory cannot
+        // be observed after drop, so the Drop body's zeroize call is invoked
+        // manually here and the internal `data` array is checked.
         let mut v = FixedVec::<8>::new();
         v.extend([0xaa_u8, 0xbb, 0xcc, 0xdd].into_iter());
         assert_eq!(v.data[..4], [0xaa, 0xbb, 0xcc, 0xdd]);
-        // Simulate what Drop does: zeroize the written prefix.
         {
             use zeroize::Zeroize as _;
             v.data[..v.len].zeroize();
@@ -316,9 +308,8 @@ mod tests {
         let mut v = super::Vec::new();
         v.extend([9_u8; 16].iter().copied());
         v.zero();
-        // After zero(), the logical slice covers the full capacity and
-        // every byte reads as 0. The previous contents must not
-        // remain visible through data().
+        // After zero(), the logical slice covers full capacity and reads
+        // as all zeros; previous contents must not be visible.
         assert_eq!(v.data().len(), super::LEN);
         assert!(v.data().iter().all(|b| *b == 0));
     }
@@ -338,7 +329,6 @@ mod tests {
         original.extend([1_u8, 2, 3, 4].iter().copied());
         let copy = original.clone();
         assert_eq!(copy.data(), &[1, 2, 3, 4]);
-        // Mutating the original must not affect the clone.
         original.data_mut()[0] = 99;
         assert_eq!(copy.data(), &[1, 2, 3, 4]);
     }
@@ -351,7 +341,6 @@ mod tests {
         assert_eq!(k.enc_key().len(), 32);
         assert_eq!(k.mac_key().len(), 32);
         assert_eq!(k.as_bytes().len(), 64);
-        // First 32 bytes of 0..64 are 0..32; last 32 bytes are 32..64.
         assert_eq!(k.enc_key()[0], 0);
         assert_eq!(k.enc_key()[31], 31);
         assert_eq!(k.mac_key()[0], 32);

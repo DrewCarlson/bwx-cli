@@ -25,8 +25,8 @@ pub struct Request {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
     /// Human-readable description of what the user ran (e.g. `get
-    /// google.com`). Not authentication-relevant; used only to enrich
-    /// UI prompts on the agent side (Touch ID dialog, pinentry CONFIRM).
+    /// google.com`). Used only to enrich agent-side UI prompts (Touch ID
+    /// dialog, pinentry CONFIRM); not authentication-relevant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     purpose: Option<String>,
 }
@@ -43,11 +43,11 @@ impl Request {
     }
 
     /// Like `new`, but tags the request with a per-CLI-process session
-    /// token and a human-readable purpose string. The agent uses the
-    /// session to coalesce Touch ID prompts so that a single `bwx
-    /// <command>` invocation only pops one biometric dialog regardless
-    /// of how many `Decrypt`/`Encrypt` IPCs it fires; the purpose is
-    /// shown on the prompt itself.
+    /// token and a human-readable purpose string. The agent coalesces
+    /// Touch ID prompts by session so a single `bwx <command>` invocation
+    /// only pops one biometric dialog regardless of how many
+    /// `Decrypt`/`Encrypt` IPCs it fires; the purpose is shown on the
+    /// prompt itself.
     pub fn new_with_session(
         environment: Environment,
         action: Action,

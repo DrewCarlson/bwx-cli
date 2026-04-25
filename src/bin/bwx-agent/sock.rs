@@ -3,12 +3,10 @@ use tokio::io::{
     AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _,
 };
 
-/// Cap on the size of a single JSON-line request from the CLI. The real
-/// protocol messages are small (a few KB at most), so 16 MiB is an
-/// extravagantly generous ceiling that still blocks a misbehaving (or
-/// malicious, if the 0o700-dir assumption is ever violated) client from
-/// pushing the agent into unbounded heap growth with a newline-free
-/// stream.
+/// Cap on the size of a single JSON-line request from the CLI. Blocks a
+/// misbehaving (or malicious, if the 0o700-dir assumption is violated)
+/// client from pushing the agent into unbounded heap growth with a
+/// newline-free stream.
 const MAX_MESSAGE: u64 = 16 * 1024 * 1024;
 
 pub struct Sock(tokio::net::UnixStream);
@@ -65,12 +63,11 @@ impl Sock {
 }
 
 /// Verify that the peer connected to `stream` is running as the same
-/// uid as this process. Unix sockets in a 0o700 runtime dir already
-/// block cross-user access at the filesystem layer; this is
-/// belt-and-braces for the case where someone loosens those dir
-/// permissions, mounts the path into a sandbox, or passes the
-/// connected fd across a privilege boundary. Rejects gracefully (error
-/// return, no panic) so the accept loop stays up.
+/// uid as this process. The 0o700 runtime dir already blocks cross-user
+/// access at the filesystem layer; this catches the case where someone
+/// loosens those dir permissions, mounts the path into a sandbox, or
+/// passes the connected fd across a privilege boundary. Rejects with an
+/// error rather than panicking so the accept loop stays up.
 pub fn check_peer_uid(
     stream: &tokio::net::UnixStream,
 ) -> bin_error::Result<()> {
@@ -88,11 +85,10 @@ pub fn check_peer_uid(
     Ok(())
 }
 
-/// Read the uid of the process connected on the other end of a Unix
-/// socket fd. `SO_PEERCRED` is the Linux idiom (glibc's `getpeereid`
-/// wraps it, but musl omits the wrapper and the libc crate follows
-/// suit, so we call it directly). `getpeereid` is the BSD / macOS
-/// idiom.
+/// Read the uid of the process on the other end of a Unix socket fd.
+/// `SO_PEERCRED` is the Linux idiom; called directly because musl omits
+/// the `getpeereid` wrapper and the libc crate follows suit.
+/// `getpeereid` is the BSD / macOS idiom.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn peer_ucred(fd: std::os::unix::io::RawFd) -> std::io::Result<libc::ucred> {
     let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
@@ -121,9 +117,8 @@ fn peer_uid(fd: std::os::unix::io::RawFd) -> std::io::Result<u32> {
 }
 
 /// Peer PID of a Unix-socket fd. Best effort — returns `None` if the
-/// platform doesn't expose it (or if the syscall fails). Used only for
-/// building a human-readable description of which client is making a
-/// request; never for authorization.
+/// platform doesn't expose it or if the syscall fails. Used only for
+/// human-readable client descriptions; never for authorization.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn peer_pid(fd: std::os::unix::io::RawFd) -> Option<i32> {
     peer_ucred(fd).ok().map(|c| c.pid)
@@ -151,8 +146,7 @@ fn peer_uid(fd: std::os::unix::io::RawFd) -> std::io::Result<u32> {
 
 /// macOS exposes the peer pid via `LOCAL_PEERPID` (level `SOL_LOCAL`,
 /// which is `0` for `AF_UNIX`). Both constants are stable in Darwin's
-/// `sys/un.h`. Best effort — returns `None` on error, since this is
-/// only used for the human-readable prompt description.
+/// `sys/un.h`. Best effort — returns `None` on error.
 #[cfg(target_os = "macos")]
 pub fn peer_pid(fd: std::os::unix::io::RawFd) -> Option<i32> {
     // From <sys/un.h>: #define LOCAL_PEERPID 2, SOL_LOCAL = 0.
@@ -194,21 +188,18 @@ pub fn listen() -> bin_error::Result<tokio::net::UnixListener> {
 }
 
 /// Bind a `UnixListener` at `path` without a remove-then-bind TOCTOU
-/// window. We bind to a unique sibling path (`<name>.<pid>.<rand>.tmp`)
-/// in the same directory and then `rename(2)` it onto `path`. `rename`
-/// is atomic within a filesystem and clobbers any existing file at the
-/// destination, so a racing same-user process can't slip a symlink or
-/// regular file under us between the unlink and the bind (the old
-/// pattern).
+/// window. Binds to a unique sibling path and then `rename(2)`s it onto
+/// `path`. `rename` is atomic within a filesystem and clobbers any
+/// existing file at the destination, so a racing same-user process can't
+/// slip a symlink or regular file in between an unlink and a bind.
 pub fn bind_atomic(
     path: &std::path::Path,
 ) -> std::io::Result<tokio::net::UnixListener> {
-    // Try the atomic path. If it fails for *any* reason — including
-    // Darwin's ~104-byte `sockaddr_un.sun_path` limit once the tmp
-    // suffix is appended — fall back to the legacy unlink-then-bind
-    // approach so the agent still starts. The fallback has a tiny
-    // same-user TOCTOU window, which is blocked in practice by our
-    // 0o700 runtime dir, but we log it so it's observable.
+    // If the atomic path fails for any reason — including Darwin's
+    // ~104-byte `sockaddr_un.sun_path` limit once the tmp suffix is
+    // appended — fall back to unlink-then-bind so the agent still
+    // starts. The fallback has a tiny same-user TOCTOU window, blocked
+    // in practice by the 0o700 runtime dir; logged so it's observable.
     match bind_atomic_inner(path) {
         Ok(l) => Ok(l),
         Err(e) => {
@@ -237,9 +228,9 @@ fn bind_atomic_inner(
         )
     })?;
     // Minimal tmp name: 4 random bytes of hex with a tiny prefix. Keeps
-    // the total tmp path length under Darwin's 104-byte `sun_path`
-    // limit in almost all layouts. The filename itself doesn't need to
-    // resemble the target — we rename(2) over the target below.
+    // the total tmp path under Darwin's 104-byte `sun_path` limit in
+    // almost all layouts. The filename doesn't need to resemble the
+    // target — rename(2) replaces it below.
     let mut nonce = [0u8; 4];
     rand::rng().fill_bytes(&mut nonce);
     let mut nonce_hex = String::with_capacity(nonce.len() * 2 + 2);
@@ -249,9 +240,9 @@ fn bind_atomic_inner(
     }
     let tmp = parent.join(nonce_hex);
 
-    // Best-effort cleanup of our own tmp name in case a prior crashed
-    // agent left one behind. The nonce makes a collision vanishingly
-    // unlikely, but harmless to clean anyway.
+    // Best-effort cleanup in case a prior crashed agent left a tmp
+    // behind. Nonce collision is vanishingly unlikely but harmless to
+    // clean.
     let _ = std::fs::remove_file(&tmp);
 
     let listener = tokio::net::UnixListener::bind(&tmp)?;

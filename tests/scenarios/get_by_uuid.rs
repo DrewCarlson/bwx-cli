@@ -1,6 +1,4 @@
-//! `bwx get <uuid>` should resolve by UUID, not only by name. `list
-//! --fields id,name` is the documented way to discover entry UUIDs,
-//! so this test exercises both halves of the contract.
+//! `bwx get <uuid>` resolves by UUID; `list --fields id,name` exposes them.
 
 use crate::common::{register_user, BwxHarness};
 use crate::skip_if_no_vaultwarden;
@@ -18,8 +16,7 @@ fn get_by_uuid_matches_get_by_name() {
 
     harness.run_with_stdin(&["add", "uuid.target"], b"uuid-pw\n\n\n");
 
-    // `list --fields id,name` produces "<uuid>\t<name>" lines. Find
-    // ours.
+    // `list --fields id,name` produces `<uuid>\t<name>` lines.
     let listing = harness.check(&["list", "--fields", "id,name"]);
     let uuid = listing
         .lines()
@@ -30,7 +27,6 @@ fn get_by_uuid_matches_get_by_name() {
         .unwrap_or_else(|| {
             panic!("uuid for 'uuid.target' not in listing:\n{listing}")
         });
-    // A Bitwarden UUID is 36 chars: 8-4-4-4-12 hex + 4 dashes.
     assert_eq!(uuid.len(), 36, "expected a canonical UUID, got {uuid:?}");
 
     let by_name = harness.check(&["get", "uuid.target"]);

@@ -1,9 +1,4 @@
 //! Shared helpers for the bwx integration tests.
-//!
-//! This module intentionally lives under `tests/` rather than as a dev-only
-//! library crate — it is only ever compiled as part of the `e2e` integration
-//! test binary, and is allowed to rely on public APIs of the `bwx` library
-//! crate (`src/lib.rs`).
 
 #![allow(dead_code)] // shared helpers; not every scenario uses everything.
 #![allow(clippy::items_after_statements)]
@@ -37,7 +32,7 @@ use std::time::{Duration, Instant};
 use rsa::pkcs8::{EncodePrivateKey as _, EncodePublicKey as _};
 
 // Re-use bwx's own crypto primitives so the registration payload exactly
-// matches what the production client would generate/accept.
+// matches what the production client generates/accepts.
 use bwx::cipherstring::CipherString;
 use bwx::identity::Identity;
 use bwx::locked;
@@ -75,7 +70,6 @@ impl VaultwardenServer {
             .env("SIGNUPS_VERIFY", "false")
             .env("DISABLE_ICON_DOWNLOAD", "true")
             .env("WEB_VAULT_ENABLED", "false")
-            // Keep the log volume down unless the caller opted in.
             .env(
                 "ROCKET_LOG_LEVEL",
                 std::env::var("VAULTWARDEN_LOG_LEVEL")
@@ -96,7 +90,6 @@ impl VaultwardenServer {
         };
 
         if let Err(e) = server.wait_until_ready(Duration::from_secs(10)) {
-            // Best-effort: the Drop impl will kill the child.
             panic!("vaultwarden did not become ready: {e}");
         }
         Some(server)
@@ -139,7 +132,6 @@ fn find_vaultwarden() -> Option<PathBuf> {
             return None;
         }
     }
-    // Search $PATH.
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         let candidate = dir.join("vaultwarden");
@@ -195,7 +187,6 @@ impl BwxHarness {
 
         // `directories::ProjectDirs` honors `XDG_CONFIG_HOME` on Linux but on
         // macOS always resolves to `$HOME/Library/Application Support/bwx`.
-        // Compute the right path per platform.
         let bwx_cfg_dir = if cfg!(target_os = "macos") {
             home.join("Library/Application Support/bwx")
         } else {
@@ -222,14 +213,11 @@ impl BwxHarness {
         )
         .expect("write config.json");
 
-        // Write a fake pinentry that speaks just enough of the Assuan
-        // protocol to satisfy src/pinentry.rs.
+        // Fake pinentry that speaks just enough of the Assuan protocol to
+        // satisfy src/pinentry.rs.
         let pinentry_path = root.join("fake-pinentry.sh");
         let script = format!(
             "#!/bin/sh\n\
-             # Minimal Assuan-protocol pinentry that always answers with the\n\
-             # test master password. Reads client commands on stdin and replies\n\
-             # on stdout.\n\
              printf 'OK Pleased to meet you\\n'\n\
              while IFS= read -r line; do\n\
                  case \"$line\" in\n\
@@ -260,8 +248,7 @@ impl BwxHarness {
                 .expect("chmod pinentry");
         }
 
-        // Re-write config.json with the real pinentry path now that we know
-        // it.
+        // Rewrite config.json with the real pinentry path.
         let cfg = serde_json::json!({
             "email": email,
             "base_url": server.base_url,
@@ -419,22 +406,18 @@ impl BwxHarness {
             .unwrap_or_else(|e| panic!("wait bwx {args:?}: {e}"))
     }
 
-    /// Log into the server + unlock the vault. Used as the first step of
-    /// almost every scenario.
+    /// Log into the server and unlock the vault.
     pub fn login_and_unlock(&self) {
         self.check(&["login"]);
         self.check(&["unlock"]);
     }
 
-    /// Convenience: install an `$EDITOR` that rewrites the supplied tempfile
-    /// with `new_contents` exactly, so `bwx edit` / `bwx add` become
-    /// deterministic. The script is written under the harness tempdir and its
-    /// path is returned — callers set it on `cmd()` via `.env("EDITOR", ...)`.
+    /// Install an `$EDITOR` that rewrites the supplied tempfile with
+    /// `new_contents` exactly, so `bwx edit` / `bwx add` become deterministic.
     pub fn fake_editor(&self, new_contents: &str) -> PathBuf {
         let path = self.tempdir.path().join("fake-editor.sh");
         let body = format!(
             "#!/bin/sh\n\
-             # Overwrite the file bwx passed us with a fixed payload.\n\
              cat <<'__BWX_E2E_EOF__' > \"$1\"\n{new_contents}\n__BWX_E2E_EOF__\n",
         );
         std::fs::write(&path, body).expect("write fake editor");
@@ -456,7 +439,6 @@ impl BwxHarness {
             .env("XDG_RUNTIME_DIR", &self.runtime_dir)
             .env("HOME", &self.home)
             .env("BWX_AGENT", env!("CARGO_BIN_EXE_bwx-agent"))
-            // Keep tests non-interactive and deterministic.
             .env_remove("BWX_PROFILE")
             .env_remove("DISPLAY")
             .env_remove("WAYLAND_DISPLAY")
@@ -466,8 +448,8 @@ impl BwxHarness {
 
 impl Drop for BwxHarness {
     fn drop(&mut self) {
-        // Best-effort: stop any agent this harness may have spawned so it
-        // releases the socket before the tempdir is unlinked.
+        // Stop any agent this harness spawned so it releases the socket
+        // before the tempdir is unlinked.
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_bwx"));
         self.apply_env(&mut cmd);
         let _ = cmd
@@ -479,7 +461,6 @@ impl Drop for BwxHarness {
 }
 
 fn shell_escape(s: &str) -> String {
-    // Single-quote wrap, escaping embedded single quotes.
     let mut out = String::with_capacity(s.len() + 2);
     out.push('\'');
     for c in s.chars() {
@@ -500,17 +481,14 @@ fn shell_escape(s: &str) -> String {
 const KDF_ITERATIONS: u32 = 600_000;
 const KDF_TYPE_PBKDF2: u8 = 0;
 
-/// Register a new account on the given vaultwarden server using the
-/// Bitwarden `/identity/accounts/register` endpoint. Mirrors the bitwarden
-/// web vault's registration payload: derives a master key via PBKDF2, wraps a
-/// random 64-byte vault key with it, and attaches a freshly-generated RSA
-/// keypair.
+/// Register a new account against `/identity/accounts/register`, mirroring
+/// the Bitwarden web vault's payload (PBKDF2 master key, wrapped 64-byte
+/// vault key, fresh RSA keypair).
 pub fn register_user(
     server: &VaultwardenServer,
     email: &str,
     password: &str,
 ) -> Result<(), String> {
-    // 1. Derive master key + master-password hash via bwx's Identity type.
     let mut pw_vec = locked::Vec::new();
     pw_vec.extend(password.as_bytes().iter().copied());
     let locked_pw = locked::Password::new(pw_vec);
@@ -518,8 +496,6 @@ pub fn register_user(
     let identity = Identity::new(
         email,
         &locked_pw,
-        // KdfType::Pbkdf2 is #[repr] but the enum isn't public as u8; pass
-        // via the public type.
         bwx::api::KdfType::Pbkdf2,
         KDF_ITERATIONS,
         None,
@@ -527,8 +503,8 @@ pub fn register_user(
     )
     .map_err(|e| format!("derive identity: {e}"))?;
 
-    // 2. Generate a random 64-byte vault key (enc_key||mac_key) and wrap it
-    //    with the stretched master key.
+    // Random 64-byte vault key (enc_key||mac_key), wrapped with the stretched
+    // master key.
     use rand_8::RngCore as _;
     let mut vault_bytes = [0u8; 64];
     rand_8::rngs::OsRng.fill_bytes(&mut vault_bytes);
@@ -538,14 +514,12 @@ pub fn register_user(
             .map_err(|e| format!("encrypt vault key: {e}"))?
             .to_string();
 
-    // 3. Build a locked::Keys around the vault key for wrapping the private
-    //    key below.
     let mut vault_keys_buf = locked::Vec::new();
     vault_keys_buf.extend(vault_bytes.iter().copied());
     let vault_keys = locked::Keys::new(vault_keys_buf);
 
-    // 4. Generate an RSA-2048 keypair. Public key is sent as raw SPKI DER
-    //    (base64), private key is wrapped PKCS#8 DER with the vault key.
+    // RSA-2048 keypair: public key as raw SPKI DER (base64); private key as
+    // PKCS#8 DER wrapped with the vault key.
     let mut rng = rand_8::rngs::OsRng;
     let rsa_priv = rsa::RsaPrivateKey::new(&mut rng, 2048)
         .map_err(|e| format!("generate rsa: {e}"))?;
@@ -564,10 +538,8 @@ pub fn register_user(
             .map_err(|e| format!("wrap rsa priv: {e}"))?
             .to_string();
 
-    // 5. Base64-encode the master-password hash.
     let mph_b64 = base64_encode(identity.master_password_hash.hash());
 
-    // 6. POST the registration.
     let body = serde_json::json!({
         "email": email,
         "name": email,
@@ -611,9 +583,8 @@ fn base64_encode_url_safe_no_pad(b: &[u8]) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Authenticated API helper — for tests that need to create entries the way
-// "another client" would (outside of the bwx binary under test), most
-// commonly to populate a field like `totp` that bwx's CLI can't set.
+// Authenticated API helper for tests that need to create entries as "another
+// client" (e.g. to populate fields like `totp` that bwx's CLI can't set).
 // ---------------------------------------------------------------------------
 
 pub struct Account {
@@ -621,9 +592,8 @@ pub struct Account {
     pub vault_keys: locked::Keys,
 }
 
-/// Authenticate against vaultwarden's /identity/connect/token password flow.
-/// Mirrors what bwx's own login does, but runs in-process so tests can POST
-/// ciphers directly to the server.
+/// Authenticate against vaultwarden's /identity/connect/token password flow,
+/// in-process, so tests can POST ciphers directly to the server.
 pub fn authenticate(
     server: &VaultwardenServer,
     email: &str,
@@ -750,9 +720,8 @@ pub fn upload_ssh_cipher(
     Ok(())
 }
 
-/// Upload a Login cipher with the supplied plaintext fields. Everything
-/// listed on the cipher is encrypted client-side with the account's vault
-/// key first; vaultwarden never sees plaintext.
+/// Upload a Login cipher. Fields are encrypted client-side with the
+/// account's vault key before transmission.
 pub fn upload_login_cipher(
     server: &VaultwardenServer,
     account: &Account,
@@ -803,7 +772,6 @@ pub fn upload_login_cipher(
     Ok(())
 }
 
-// Make sure shell_escape doesn't bit-rot if the harness ever stops using it.
 #[cfg(test)]
 mod unit {
     use super::shell_escape;

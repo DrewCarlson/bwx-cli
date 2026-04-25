@@ -26,13 +26,12 @@ fn purge_clears_cache_sync_refetches() {
         "entry missing pre-purge:\n{before}"
     );
 
-    // purge removes the local cached db and stops the agent.
+    // `purge` removes the local cached db and stops the agent.
     assert!(
         harness.run(&["purge"]).status.success(),
         "purge exited nonzero"
     );
 
-    // Log in + sync must repopulate the local cache from the server.
     harness.check(&["login"]);
     harness.check(&["unlock"]);
     harness.check(&["sync"]);

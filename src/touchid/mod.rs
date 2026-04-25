@@ -1,10 +1,8 @@
 //! Touch ID / biometric authorization gate.
 //!
-//! macOS-only feature; see `SPIKE_TOUCHID.md` for the architecture
-//! discussion. On macOS the gate calls `LAContext::evaluate_policy` via
-//! `objc2-local-authentication`. On other platforms `require_presence`
-//! is a stub that always returns `Ok(true)`, so callers can use the
-//! same API everywhere without cfg gating at every site.
+//! On macOS, calls `LAContext::evaluate_policy` via
+//! `objc2-local-authentication`. On other platforms `require_presence` is a
+//! stub that always returns `Ok(true)`, so callers need no cfg gating.
 
 pub mod blob;
 #[cfg(target_os = "macos")]
@@ -21,7 +19,7 @@ pub enum Gate {
     Off,
     /// Only ssh-agent sign requests and `bwx code` TOTP generation.
     Signing,
-    /// Every response that carries plaintext secret material.
+    /// Every response carrying plaintext secret material.
     All,
 }
 
@@ -75,9 +73,8 @@ pub fn gate_applies(gate: Gate, kind: Kind) -> bool {
 
 /// Await a biometric confirmation from the user.
 ///
-/// Returns `Ok(true)` if the user authenticated, `Ok(false)` if they
-/// cancelled, `Err(..)` only for unexpected failures (hardware missing,
-/// permissions, etc.). On non-macOS builds this always returns `Ok(true)`.
+/// `Ok(true)` on success, `Ok(false)` on cancel, `Err(..)` for unexpected
+/// failures. On non-macOS builds always returns `Ok(true)`.
 #[cfg(target_os = "macos")]
 pub async fn require_presence(reason: &str) -> Result<bool, Error> {
     macos::require_presence(reason).await
@@ -121,9 +118,9 @@ mod macos {
 
     use super::Error;
 
-    /// Test bypass for e2e scenarios: if set to "allow"/"deny" AND the
-    /// binary was built with debug assertions, the FFI call is skipped and
-    /// the bypass value is used. Ignored in release builds.
+    /// Test bypass for e2e scenarios. If `BWX_TOUCHID_TEST_BYPASS` is
+    /// "allow"/"deny" AND debug assertions are enabled, the FFI call is
+    /// skipped. Ignored in release builds.
     fn debug_bypass() -> Option<bool> {
         if !cfg!(debug_assertions) {
             return None;
@@ -136,10 +133,9 @@ mod macos {
     }
 
     /// Synchronous setup: create the `LAContext`, install the completion
-    /// handler, kick off `evaluatePolicy`. Returns a `Receiver` that will
-    /// be signalled when the OS callback fires. All objc types are
-    /// confined to this function so they never cross an `.await`, keeping
-    /// the outer async future `Send`.
+    /// handler, kick off `evaluatePolicy`. All objc types are confined to
+    /// this function so they never cross an `.await`, keeping the outer
+    /// async future `Send`.
     fn begin_presence_check(
         reason: &str,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<bool, Error>>, Error>
@@ -164,8 +160,8 @@ mod macos {
                 } else if err.is_null() {
                     Ok(false)
                 } else {
-                    // SAFETY: the framework hands us a retained NSError
-                    // that's live for the duration of the callback.
+                    // SAFETY: the framework passes a retained NSError live
+                    // for the duration of the callback.
                     let desc =
                         unsafe { (*err).localizedDescription().to_string() };
                     let code = unsafe { (*err).code() };

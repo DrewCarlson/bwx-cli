@@ -12,8 +12,8 @@
         pkgs = import nixpkgs { inherit system; };
         inherit (pkgs) lib stdenv;
 
-        # Read package metadata straight from Cargo.toml so a version bump
-        # only needs editing in one place.
+        # Read package metadata from Cargo.toml so a version bump only
+        # needs editing in one place.
         cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
 
         bwx-cli = pkgs.rustPlatform.buildRustPackage {
@@ -30,8 +30,8 @@
             CoreFoundation Security LocalAuthentication
           ]);
 
-          # The e2e tests need a vaultwarden binary on PATH; skip them in
-          # the Nix sandbox. Keep the unit tests.
+          # The e2e tests need a vaultwarden binary on PATH; skip them
+          # in the Nix sandbox. Keep the unit tests.
           checkFlags = [ "--lib" ];
 
           postInstall = ''

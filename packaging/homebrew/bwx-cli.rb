@@ -10,8 +10,8 @@ class BwxCli < Formula
   version "__VERSION__"
   license "MIT"
 
-  # Linux users need pinentry for the master-password UI; macOS uses
-  # the bundled osascript dialog so it's optional there.
+  # Linux needs pinentry for the master-password UI; macOS uses the
+  # bundled osascript dialog so it's optional there.
   on_linux do
     depends_on "pinentry"
   end

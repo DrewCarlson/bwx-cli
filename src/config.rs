@@ -21,12 +21,10 @@ pub struct Config {
     pub client_cert_path: Option<std::path::PathBuf>,
     #[serde(default)]
     pub ssh_confirm_sign: bool,
-    /// On macOS, controls how the master-password prompt is shown at
-    /// unlock time. Default `true` renders a native `CFUserNotification`
-    /// modal (works from daemonized contexts — ssh-sign, Finder-
-    /// launched GUI git, etc.). Set `false` to fall back to pinentry
-    /// if you prefer the terminal experience. No effect on other
-    /// platforms.
+    /// On macOS, controls how the master-password prompt is shown at unlock
+    /// time. Default `true` renders a native modal (works from daemonized
+    /// contexts — ssh-sign, Finder-launched GUI git, etc.). Set `false` to
+    /// fall back to pinentry. No effect on other platforms.
     #[serde(default = "default_macos_unlock_dialog")]
     pub macos_unlock_dialog: bool,
     #[serde(
@@ -177,9 +175,9 @@ impl Config {
                 source,
                 file: file.clone(),
             })?;
-        // `OpenOptions::mode` only applies on file creation; if the
-        // file already exists (e.g. a user created it with a looser
-        // mode) we still want to tighten it every time bwx writes.
+        // `OpenOptions::mode` only applies on file creation; tighten
+        // unconditionally so a pre-existing loose-mode file is corrected
+        // on every write.
         fh.set_permissions(std::fs::Permissions::from_mode(0o600))
             .map_err(|source| Error::SaveConfig {
                 source,

@@ -1,13 +1,6 @@
-//! Exercise the Touch ID gate without actually prompting the user.
-//!
-//! In debug builds (everything cargo-test produces), `bwx::touchid`
-//! honours `BWX_TOUCHID_TEST_BYPASS=allow|deny` and skips the real
-//! `LAContext` FFI, treating the env value as a synthetic user
-//! response. That lets us lock in the gate semantics in CI without
-//! Touch ID hardware.
-//!
-//! macOS only. On Linux the gate is a compile-time no-op so there's
-//! nothing to assert.
+//! Exercise the Touch ID gate. In debug builds `bwx::touchid` honours
+//! `BWX_TOUCHID_TEST_BYPASS=allow|deny` and skips the real `LAContext` FFI,
+//! letting CI assert gate semantics without Touch ID hardware. macOS only.
 
 #![cfg(target_os = "macos")]
 
@@ -25,7 +18,6 @@ fn gate_off_skips_touchid() {
     let harness = BwxHarness::new(&server, email, password);
     harness.login_and_unlock();
 
-    // Add an entry we can `get` later.
     harness
         .run_with_stdin(&["add", "e1"], b"pw\n\n\n")
         .status
@@ -33,9 +25,8 @@ fn gate_off_skips_touchid() {
         .then_some(())
         .expect("add");
 
-    // touchid_gate is "off" by default. Even with bypass=deny — which
-    // would block any consulted prompt — the get must succeed, proving
-    // the gate path wasn't consulted at all.
+    // gate=off: even bypass=deny must let `get` through, proving the gate
+    // path wasn't consulted.
     let out = harness
         .cmd()
         .env("BWX_TOUCHID_TEST_BYPASS", "deny")
@@ -67,10 +58,8 @@ fn gate_all_bypass_allow_succeeds() {
         .then_some(())
         .expect("add");
 
-    // Flip gate on. The bypass env has to be set on the *agent*
-    // because the gate runs there; easiest way is to stop the agent
-    // and let the next CLI invocation — which inherits our env —
-    // respawn it.
+    // The bypass env must reach the *agent* (where the gate runs); the
+    // CLI inherits the env and respawns the agent on next invocation.
     harness.check(&["config", "set", "touchid_gate", "all"]);
 
     let out = harness
@@ -140,9 +129,8 @@ fn gate_signing_spares_vault_reads() {
         .expect("add");
     harness.check(&["config", "set", "touchid_gate", "signing"]);
 
-    // gate=signing means VaultSecret operations bypass the gate entirely.
-    // With bypass=deny, get must still succeed (gate not consulted) —
-    // proving Gate::Signing excludes VaultSecret.
+    // gate=signing excludes VaultSecret from the gate; bypass=deny must
+    // still let `get` succeed.
     let out = harness
         .cmd()
         .env("BWX_TOUCHID_TEST_BYPASS", "deny")

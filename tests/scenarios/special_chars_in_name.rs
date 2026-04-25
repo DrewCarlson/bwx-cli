@@ -1,8 +1,5 @@
-//! Entry names containing characters that are historically problematic
-//! in shell-pipe contexts — forward slash (path-like), vertical bar
-//! (cipherstring separator), equals sign (URL-query separator),
-//! whitespace, single/double quotes — must round-trip through add /
-//! list / get without mangling.
+//! Entry names with shell-problematic characters (`/`, `|`, `=`, whitespace,
+//! quotes) must round-trip through add / list / get without mangling.
 
 use crate::common::{register_user, BwxHarness};
 use crate::skip_if_no_vaultwarden;
@@ -18,9 +15,8 @@ fn shell_metachars_in_name_roundtrip() {
     let harness = BwxHarness::new(&server, email, password);
     harness.login_and_unlock();
 
-    // Deliberately pick names that would break a naive cipherstring
-    // splitter ('|'), a URL-query parser ('='), a shell-path resolver
-    // ('/'), or a format-string argument handler ('{').
+    // Names that would break a naive cipherstring splitter ('|'), URL-query
+    // parser ('='), shell-path resolver ('/'), or format-string ('{').
     let names = &[
         "svc/github.com",
         "pipe|separator",
@@ -41,7 +37,6 @@ fn shell_metachars_in_name_roundtrip() {
         );
     }
 
-    // Every name should appear verbatim in the listing.
     let listing = harness.check(&["list"]);
     for name in names {
         assert!(
@@ -50,8 +45,6 @@ fn shell_metachars_in_name_roundtrip() {
         );
     }
 
-    // Each entry's stored password should retrievable by that exact
-    // name argument.
     for (i, name) in names.iter().enumerate() {
         let got = harness.check(&["get", name]);
         assert_eq!(

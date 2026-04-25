@@ -15,8 +15,7 @@ fn create_dir_all_with_permissions(
     path: &std::path::Path,
     mode: u32,
 ) -> Result<()> {
-    // ensure the initial directory creation happens with the correct mode,
-    // to avoid race conditions
+    // create with the correct mode to avoid a race between mkdir and chmod
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(mode)
@@ -25,8 +24,7 @@ fn create_dir_all_with_permissions(
             source,
             file: path.to_path_buf(),
         })?;
-    // but also make sure to forcibly set the mode, in case the directory
-    // already existed
+    // forcibly set the mode in case the directory already existed
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
         .map_err(|source| Error::CreateDirectory {
             source,
@@ -120,7 +118,7 @@ fn data_dir() -> std::path::PathBuf {
 fn runtime_dir() -> std::path::PathBuf {
     // Honor XDG_RUNTIME_DIR on all platforms when explicitly set. macOS has
     // no native equivalent, but respecting the override lets tests and
-    // advanced users isolate per-instance sockets; falls through to a
+    // advanced users isolate per-instance sockets. Falls through to a
     // $TMPDIR-based path when unset.
     if let Some(d) = std::env::var_os("XDG_RUNTIME_DIR") {
         if std::path::Path::new(&d).is_absolute() {
