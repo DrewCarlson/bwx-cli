@@ -220,7 +220,10 @@ jobs:
           fi
 
           rm -f "$zip_path"
-          shred -u "$KEY_PATH"
+          # macOS doesn't ship GNU `shred`; `rm -P` (BSD) overwrites
+          # the file three times before unlinking, which is the same
+          # zero-the-disk-bytes guarantee.
+          rm -P "$KEY_PATH"
 
       - name: Tear down signing keychain
         if: always() && runner.os == 'macOS' && env.BWX_KEYCHAIN_PATH != ''
