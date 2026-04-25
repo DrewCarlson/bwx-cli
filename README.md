@@ -1,12 +1,13 @@
 # bwx
 
-Unofficial [Bitwarden](https://bitwarden.com/) CLI with a persistent
-background agent — commands don't re-prompt for the master password on
-every use, similar to `ssh-agent`.
+Bitwarden in your terminal, without the master-password prompt every
+time. `bwx` keeps your vault unlocked in a background agent — like
+`ssh-agent` for your passwords.
 
-This fork adds first-class macOS support: Touch ID unlock, native
-password dialogs, SSH commit signing, and a one-shot setup command.
-On Linux/BSD it's a drop-in replacement for upstream `rbw`.
+Fork of [`rbw`](https://github.com/doy/rbw) that adds first-class
+macOS support (Touch ID unlock, native dialogs, signed + notarized
+binaries, built-in SSH agent for git commit signing, one-shot setup).
+Drop-in replacement on Linux/BSD.
 
 ## Features
 
@@ -35,10 +36,6 @@ brew install DrewCarlson/tap/bwx-cli
 bwx setup-macos               # LaunchAgent that keeps bwx-agent alive
 ```
 
-The Homebrew install pulls the notarized release tarball, so Touch ID
-unlock and the SSH-agent paths just work — no local Rust toolchain or
-manual code-signing needed.
-
 ### Everywhere else
 
 | Channel                  | Command                                                                            |
@@ -59,57 +56,56 @@ and macOS `arm64` + `x86_64` artifacts, attached to the GitHub Release.
 On Linux you'll also want `pinentry` from your distro so the
 master-password prompt has a UI.
 
-### Verifying release artifacts
-
-Every artifact carries a SLSA build-provenance attestation (signed
-with the release workflow's GitHub OIDC identity, recorded in the
-sigstore rekor transparency log) plus a `.minisig` signature.
-
-```sh
-# GitHub-native attestation verify. Confirms the artifact was built
-# by the bwx-cli release workflow on a tagged commit; no local key
-# to install. Requires the `gh` CLI.
-gh attestation verify bwx-cli_2.0.0_amd64.deb \
-  --repo drewcarlson/bwx-cli
-
-# Minisign — single shipped pubkey at packaging/minisign.pub.
-minisign -V -p packaging/minisign.pub \
-  -m bwx-cli_2.0.0_amd64.deb
-
-# `SHA256SUMS` covers every file in the release; verify it once,
-# then check artifacts against it.
-sha256sum -c SHA256SUMS
-```
-
 ## Usage
+
+### First-time setup
 
 ```sh
 bwx config set email you@example.com
 bwx config set base_url https://vault.example.com   # self-hosted only
 
-bwx register        # only for the official bitwarden.com server
-bwx login           # master password + 2FA
+bwx register   # bitwarden.com only
+bwx login      # master password + 2FA
 bwx sync
-
-bwx add <name>
-bwx ls
-bwx get <name>      # --full for notes, --field for a specific field,
-                    # --raw for JSON
-bwx code <name>     # TOTP
-bwx edit <name>     # opens $EDITOR
-bwx remove <name>
-bwx lock            # drop keys from memory
-
-bwx help            # full reference
 ```
 
-Commands auto-unlock and auto-login as needed. `bwx get` accepts a
-name, UUID, or URL.
+**Bitwarden.com users:** the official server's bot detection rejects
+CLI clients that haven't called `register` once with a [personal API
+key](https://bitwarden.com/help/article/personal-api-key/).
+Self-hosted servers (Vaultwarden, etc.) skip this step.
 
-**Bitwarden.com users:** run `bwx register` once with your
-[personal API key](https://bitwarden.com/help/article/personal-api-key/)
-before `bwx login`. The official server's bot detection rejects CLI
-clients that haven't registered.
+### Reading entries
+
+```sh
+bwx get github.com           # password by entry name
+bwx get <uuid>               # by Bitwarden item UUID
+bwx get https://github.com   # by stored URI
+bwx get --field totp <name>  # any single field
+bwx get --full <name>        # password + fields + notes
+bwx get --raw <name>         # JSON
+bwx code <name>              # generated TOTP code
+```
+
+The agent auto-unlocks on the first call after `bwx login` (or after a
+lock-timeout expiry).
+
+### Adding, editing, removing
+
+```sh
+bwx add <name>               # password from $EDITOR or stdin
+bwx edit <name>              # opens the entry in $EDITOR
+bwx remove <name>
+```
+
+### Locking the vault
+
+```sh
+bwx lock                     # drop keys from memory immediately
+bwx unlocked                 # exit 0 if unlocked, 1 if locked
+```
+
+The vault auto-locks after `lock_timeout` seconds of inactivity (1h by
+default — configurable). `bwx help` lists every subcommand.
 
 ## Touch ID unlock (macOS)
 
@@ -162,8 +158,8 @@ bwx ssh-allowed-signers > ~/.config/git/allowed_signers
 git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
 ```
 
-Add a confirmation prompt before each signature (defence in depth
-against a process silently signing while the agent is unlocked):
+Require a confirmation prompt before each signature, so a
+background process can't sign silently while the agent is unlocked:
 
 ```sh
 bwx config set ssh_confirm_sign true
@@ -217,21 +213,52 @@ Not supported: WebAuthn / Passkey, Duo. Add a supported mechanism
 alongside them — bwx will use the supported one while your web/mobile
 clients keep whichever you prefer.
 
+## Verifying release artifacts
+
+Every release artifact carries a SLSA build-provenance attestation
+(signed with the release workflow's GitHub OIDC identity, recorded in
+the sigstore rekor transparency log) plus a `.minisig` signature.
+
+```sh
+# GitHub-native attestation verify. Confirms the artifact was built
+# by the bwx-cli release workflow on a tagged commit. Requires `gh`.
+gh attestation verify bwx-cli_2.0.0_amd64.deb \
+  --repo drewcarlson/bwx-cli
+
+# Minisign — single shipped pubkey at packaging/minisign.pub.
+minisign -V -p packaging/minisign.pub \
+  -m bwx-cli_2.0.0_amd64.deb
+
+# `SHA256SUMS` covers every file in the release.
+sha256sum -c SHA256SUMS
+```
+
 ---
 
 # Appendix: macOS internals
 
 ## Code signing
 
-`cargo install` produces unsigned binaries; macOS AMFI kills unsigned
-processes that touch the Keychain. `scripts/install.sh` wraps
-`cargo install` and runs `scripts/sign-macos.sh`, which auto-picks the
-strongest signing identity on your machine:
+**No paid Apple Developer cert? You're fine.** If `scripts/install.sh`
+can't find one in your keychain it falls back to ad-hoc signing
+(`codesign -s -`) and the agent still works for personal use — Touch
+ID prompts are enforced by `bwx-agent`'s own `LAContext` call instead
+of an OS-level Keychain ACL.
+
+The full picture: `cargo install` produces unsigned binaries; macOS
+AMFI kills unsigned processes that touch the Keychain.
+`scripts/install.sh` wraps `cargo install` and runs
+`scripts/sign-macos.sh`, which auto-picks the strongest signing
+identity on your machine:
 
 1. `$IDENTITY` env var (explicit override).
 2. Developer ID Application cert (paid Apple Developer program).
 3. Apple Development cert (free via Xcode).
-4. Ad-hoc.
+4. Ad-hoc (`-`) — no cert required.
+
+The Homebrew install ships pre-signed with Developer ID and is
+notarized by Apple, so users coming through `brew` don't need to
+think about any of this.
 
 Keychain security varies by tier:
 
