@@ -75,6 +75,29 @@ jobs:
       - name: Build release binaries
         run: cargo build --release --locked --target ${{ matrix.target }}
 
+      # Generated *before* the macOS signing step so we can still
+      # exec the binary to drive `gen-completions`. After signing
+      # with hardened runtime + a `keychain-access-groups`
+      # entitlement, AMFI rejects the binary on first exec
+      # (CDHash isn't yet known to Apple), so a `--version` check
+      # would `Killed: 9`. Completions are pure text and target-
+      # independent — generating them now is safe.
+      - name: Generate shell completions
+        run: |
+          mkdir -p target/${{ matrix.target }}/release/completion
+          BWX=target/${{ matrix.target }}/release/bwx
+          # On cross-compiled or different-arch matrix entries the
+          # target binary won't exec on this host (different libc /
+          # arch) — fall back to a host build purely for the
+          # completion generation pass.
+          if ! "$BWX" --version >/dev/null 2>&1; then
+            cargo build --release --bin bwx
+            BWX=target/release/bwx
+          fi
+          "$BWX" gen-completions bash > target/${{ matrix.target }}/release/completion/bash
+          "$BWX" gen-completions zsh  > target/${{ matrix.target }}/release/completion/zsh
+          "$BWX" gen-completions fish > target/${{ matrix.target }}/release/completion/fish
+
       # ---- macOS code-signing (Developer ID Application) ----
       # Imports the maintainer's .p12 cert into a per-job tmp keychain,
       # signs both binaries with hardened runtime + entitlements, then
@@ -119,21 +142,6 @@ jobs:
           HARDENED_RUNTIME: "1"
         run: |
           ./scripts/sign-macos.sh "target/${{ matrix.target }}/release"
-
-      - name: Generate shell completions
-        run: |
-          mkdir -p target/${{ matrix.target }}/release/completion
-          BWX=target/${{ matrix.target }}/release/bwx
-          # On the cross / musl builds the binary won't run on the
-          # host (different libc / arch), so fall back to a host build
-          # purely for completion generation.
-          if ! "$BWX" --version >/dev/null 2>&1; then
-            cargo build --release --bin bwx
-            BWX=target/release/bwx
-          fi
-          "$BWX" gen-completions bash > target/${{ matrix.target }}/release/completion/bash
-          "$BWX" gen-completions zsh  > target/${{ matrix.target }}/release/completion/zsh
-          "$BWX" gen-completions fish > target/${{ matrix.target }}/release/completion/fish
 
       - name: Stage standalone tarball
         run: |
