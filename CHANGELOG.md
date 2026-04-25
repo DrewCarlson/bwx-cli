@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.1.0] - unreleased
+
+## Added
+
+* **`bwx exec --env VAR=ENTRY[#FIELD] -- <cmd>`.** Run a child process
+  with vault fields bound to environment variables. Each `--env` flag
+  resolves a vault entry (by name, UUID, or URI) and an optional field
+  (defaults to `password`); the value is passed via `execve()` only and
+  the parent zeroizes its in-process copy as soon as the child has been
+  spawned, so secrets never touch disk. The exec'd child's exit code
+  (or `128 + signal` on Unix signal termination) is propagated. Drop-in
+  replacement for `direnv` + plaintext `.env` files for CLI workflows
+  (`bwx exec --env DB_URL=db/prod#uri -- terraform apply`).
+
 ## [2.0.2] - 2026-04-25
 
 **Project renamed from `rbw` to `bwx-cli`.** The binaries are now `bwx`

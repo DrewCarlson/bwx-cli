@@ -222,6 +222,45 @@ enum Opt {
         find_args: FindArgs,
     },
 
+    #[command(
+        about = "Run a command with vault fields injected as env vars",
+        long_about = "Run a command with vault fields injected as \
+            environment variables.\n\n\
+            Each `--env VAR=ENTRY[#FIELD]` resolves a vault entry's \
+            field (defaulting to `password`) and binds it to `VAR` for \
+            the child process. The value is passed via execve() only — \
+            it is never written to disk, and the parent zeroizes its \
+            in-process copy as soon as the child is spawned. Useful as \
+            a drop-in replacement for `direnv` + plaintext `.env` \
+            files.\n\n\
+            Examples:\n  \
+                bwx exec --env DB_URL=db/prod#uri -- terraform apply\n  \
+                bwx exec --env GH=github.com -- gh pr list"
+    )]
+    Exec {
+        #[arg(
+            long = "env",
+            value_name = "VAR=ENTRY[#FIELD]",
+            help = "Bind a vault field to an environment variable; \
+                may be given multiple times",
+            action = clap::ArgAction::Append,
+            required = true,
+        )]
+        env: Vec<String>,
+        #[arg(long, help = "Folder to scope entry lookups to")]
+        folder: Option<String>,
+        #[arg(short, long, help = "Ignore case when matching entry names")]
+        ignorecase: bool,
+        #[arg(
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            num_args = 1..,
+            value_name = "CMD",
+            help = "Command and arguments to execute (place after `--`)"
+        )]
+        command: Vec<String>,
+    },
+
     #[command(about = "Lock the password database")]
     Lock,
 
@@ -342,6 +381,7 @@ impl Opt {
             Self::Edit { .. } => "edit".to_string(),
             Self::Remove { .. } => "remove".to_string(),
             Self::History { .. } => "history".to_string(),
+            Self::Exec { .. } => "exec".to_string(),
             Self::Lock => "lock".to_string(),
             Self::Purge => "purge".to_string(),
             Self::StopAgent => "stop-agent".to_string(),
@@ -558,6 +598,12 @@ fn main() {
             find_args.folder.as_deref(),
             find_args.ignorecase,
         ),
+        Opt::Exec {
+            env,
+            folder,
+            ignorecase,
+            command,
+        } => commands::exec(&env, folder.as_deref(), ignorecase, &command),
         Opt::Lock => commands::lock(),
         Opt::Purge => commands::purge(),
         Opt::StopAgent => commands::stop_agent(),

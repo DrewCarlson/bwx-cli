@@ -1,5 +1,7 @@
 use std::{fmt::Write as _, io::Write as _, os::unix::ffi::OsStrExt as _};
 
+use zeroize::Zeroize as _;
+
 use crate::bin_error::{self, ContextExt as _};
 
 // The default number of seconds the generated TOTP
@@ -1026,6 +1028,134 @@ impl DecryptedCipher {
         println!();
 
         Ok(())
+    }
+
+    /// Resolve a field name to its plaintext value without printing.
+    ///
+    /// Mirrors `display_field` but returns `Option<String>` so callers
+    /// (e.g. `bwx exec` env injection) can pass the value to a child
+    /// process without staging it through stdout. Falls through to a
+    /// substring match against custom (`fields[]`) entries when the name
+    /// isn't a built-in field.
+    fn field_value(&self, field: &str) -> Option<String> {
+        let lc = field.to_lowercase();
+        let parsed: Result<Field, _> = lc.parse();
+        if let Ok(f) = parsed {
+            let from_data = match (&self.data, f) {
+                (DecryptedData::Login { password, .. }, Field::Password) => {
+                    password.clone()
+                }
+                (
+                    DecryptedData::Login { username, .. }
+                    | DecryptedData::Identity { username, .. },
+                    Field::Username,
+                ) => username.clone(),
+                (
+                    DecryptedData::Login {
+                        totp: Some(totp), ..
+                    },
+                    Field::Totp,
+                ) => generate_totp(totp).ok(),
+                (
+                    DecryptedData::Login {
+                        uris: Some(uris), ..
+                    },
+                    Field::Uris,
+                ) => Some(
+                    uris.iter()
+                        .map(|u| u.uri.clone())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
+                (DecryptedData::Card { number, .. }, Field::CardNumber) => {
+                    number.clone()
+                }
+                (
+                    DecryptedData::Card {
+                        exp_month: Some(m),
+                        exp_year: Some(y),
+                        ..
+                    },
+                    Field::Expiration,
+                ) => Some(format!("{m}/{y}")),
+                (DecryptedData::Card { exp_month, .. }, Field::ExpMonth) => {
+                    exp_month.clone()
+                }
+                (DecryptedData::Card { exp_year, .. }, Field::ExpYear) => {
+                    exp_year.clone()
+                }
+                (DecryptedData::Card { code, .. }, Field::Cvv) => {
+                    code.clone()
+                }
+                (
+                    DecryptedData::Card {
+                        cardholder_name, ..
+                    },
+                    Field::Cardholder | Field::Name,
+                ) => cardholder_name.clone(),
+                (DecryptedData::Card { brand, .. }, Field::Brand) => {
+                    brand.clone()
+                }
+                (DecryptedData::Identity { email, .. }, Field::Email) => {
+                    email.clone()
+                }
+                (DecryptedData::Identity { city, .. }, Field::City) => {
+                    city.clone()
+                }
+                (DecryptedData::Identity { state, .. }, Field::State) => {
+                    state.clone()
+                }
+                (
+                    DecryptedData::Identity { postal_code, .. },
+                    Field::PostalCode,
+                ) => postal_code.clone(),
+                (DecryptedData::Identity { country, .. }, Field::Country) => {
+                    country.clone()
+                }
+                (DecryptedData::Identity { phone, .. }, Field::Phone) => {
+                    phone.clone()
+                }
+                (DecryptedData::Identity { ssn, .. }, Field::Ssn) => {
+                    ssn.clone()
+                }
+                (
+                    DecryptedData::Identity { license_number, .. },
+                    Field::License,
+                ) => license_number.clone(),
+                (
+                    DecryptedData::Identity {
+                        passport_number, ..
+                    },
+                    Field::Passport,
+                ) => passport_number.clone(),
+                (
+                    DecryptedData::SshKey { fingerprint, .. },
+                    Field::Fingerprint,
+                ) => fingerprint.clone(),
+                (
+                    DecryptedData::SshKey { public_key, .. },
+                    Field::PublicKey,
+                ) => public_key.clone(),
+                (
+                    DecryptedData::SshKey { private_key, .. },
+                    Field::PrivateKey,
+                ) => private_key.clone(),
+                (_, Field::Notes) => self.notes.clone(),
+                _ => None,
+            };
+            if from_data.is_some() {
+                return from_data;
+            }
+        }
+
+        for f in &self.fields {
+            if let Some(name) = &f.name {
+                if name.to_lowercase().contains(&lc) {
+                    return f.value.clone();
+                }
+            }
+        }
+        None
     }
 }
 
@@ -3258,9 +3388,237 @@ fn display_field(name: &str, field: Option<&str>, clipboard: bool) -> bool {
     )
 }
 
+/// Parsed `--env VAR=ENTRY[#FIELD]` argument for `bwx exec`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvSpec {
+    pub var: String,
+    pub entry: String,
+    pub field: Option<String>,
+}
+
+impl EnvSpec {
+    /// Parse a single `VAR=ENTRY[#FIELD]` literal.
+    ///
+    /// `VAR` is a POSIX-style identifier (`[A-Za-z_][A-Za-z0-9_]*`).
+    /// `ENTRY` is whatever `bwx get` accepts: name, UUID, or URI. The
+    /// field defaults to `password` when the `#FIELD` suffix is absent.
+    pub fn parse(spec: &str) -> bin_error::Result<Self> {
+        let (var, rest) = spec.split_once('=').ok_or_else(|| {
+            crate::bin_error::err!(
+                "bad --env spec '{spec}': expected VAR=ENTRY[#FIELD]"
+            )
+        })?;
+        if var.is_empty() {
+            crate::bin_error::bail!(
+                "bad --env spec '{spec}': empty env var name"
+            );
+        }
+        let mut chars = var.chars();
+        let first = chars.next().expect("non-empty checked above");
+        if !(first.is_ascii_alphabetic() || first == '_')
+            || !chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            crate::bin_error::bail!(
+                "bad --env spec '{spec}': '{var}' is not a valid env var name"
+            );
+        }
+        let (entry, field) = match rest.rsplit_once('#') {
+            Some((e, f)) if !f.is_empty() => (e, Some(f.to_string())),
+            _ => (rest, None),
+        };
+        if entry.is_empty() {
+            crate::bin_error::bail!(
+                "bad --env spec '{spec}': empty entry name"
+            );
+        }
+        Ok(Self {
+            var: var.to_string(),
+            entry: entry.to_string(),
+            field,
+        })
+    }
+
+    fn descriptor(&self) -> String {
+        self.field.as_deref().map_or_else(
+            || self.entry.clone(),
+            |f| format!("{}#{f}", self.entry),
+        )
+    }
+}
+
+/// Run `<command>` with vault fields injected as environment variables.
+///
+/// Each `--env VAR=ENTRY[#FIELD]` resolves the field (defaulting to
+/// `password`) on the named vault entry and adds it to the child's env
+/// only — the value is never written to disk and is zeroized from the
+/// parent's heap as soon as the child has been spawned.
+pub fn exec(
+    specs: &[String],
+    folder: Option<&str>,
+    ignore_case: bool,
+    command: &[String],
+) -> bin_error::Result<()> {
+    if command.is_empty() {
+        crate::bin_error::bail!(
+            "no command given; usage: bwx exec --env VAR=ENTRY[#FIELD] -- <cmd> [args...]"
+        );
+    }
+    let parsed: Vec<EnvSpec> = specs
+        .iter()
+        .map(|s| EnvSpec::parse(s))
+        .collect::<bin_error::Result<_>>()?;
+
+    let mut seen = std::collections::HashSet::new();
+    for s in &parsed {
+        if !seen.insert(s.var.clone()) {
+            crate::bin_error::bail!(
+                "duplicate --env binding for '{}'",
+                s.var
+            );
+        }
+    }
+
+    unlock()?;
+    let db = load_db()?;
+
+    let mut values: Vec<(String, String)> = Vec::with_capacity(parsed.len());
+    for spec in &parsed {
+        let needle = parse_needle(&spec.entry).expect("infallible");
+        let (_, decrypted) =
+            find_entry(&db, needle, None, folder, ignore_case).with_context(
+                || format!("couldn't find entry for '{}'", spec.descriptor()),
+            )?;
+        let field = spec.field.as_deref().unwrap_or("password");
+        let value = decrypted.field_value(field).ok_or_else(|| {
+            crate::bin_error::err!(
+                "field '{field}' not found on entry '{}'",
+                spec.entry
+            )
+        })?;
+        values.push((spec.var.clone(), value));
+    }
+
+    let mut cmd = std::process::Command::new(&command[0]);
+    cmd.args(&command[1..]);
+    for (k, v) in &values {
+        cmd.env(k, v);
+    }
+    let status = cmd
+        .status()
+        .with_context(|| format!("failed to spawn '{}'", &command[0]))?;
+
+    // Best-effort scrub of in-process plaintext copies. The child has
+    // already received its own copy of the env via execve(); nothing the
+    // parent can do about that.
+    for (_, v) in &mut values {
+        v.zeroize();
+    }
+    drop(values);
+
+    if let Some(code) = status.code() {
+        std::process::exit(code);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt as _;
+        if let Some(sig) = status.signal() {
+            // Shell convention: 128 + signal number.
+            std::process::exit(128 + sig);
+        }
+    }
+    std::process::exit(1);
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn env_spec_parse_simple() {
+        let s = EnvSpec::parse("AWS_KEY=aws/prod").unwrap();
+        assert_eq!(s.var, "AWS_KEY");
+        assert_eq!(s.entry, "aws/prod");
+        assert_eq!(s.field, None);
+    }
+
+    #[test]
+    fn env_spec_parse_with_field() {
+        let s = EnvSpec::parse("DB_URL=db/prod#uri").unwrap();
+        assert_eq!(s.var, "DB_URL");
+        assert_eq!(s.entry, "db/prod");
+        assert_eq!(s.field.as_deref(), Some("uri"));
+    }
+
+    #[test]
+    fn env_spec_parse_field_uses_last_hash() {
+        // Names containing '#' are unusual but legal in Bitwarden;
+        // rsplit_once means only the final '#' delimits the field, so
+        // an entry literally named "weird#name" can still take a
+        // `#password` suffix.
+        let s = EnvSpec::parse("X=weird#name#password").unwrap();
+        assert_eq!(s.entry, "weird#name");
+        assert_eq!(s.field.as_deref(), Some("password"));
+    }
+
+    #[test]
+    fn env_spec_parse_underscore_and_digits() {
+        let s = EnvSpec::parse("_FOO_BAR2=item").unwrap();
+        assert_eq!(s.var, "_FOO_BAR2");
+    }
+
+    #[test]
+    fn env_spec_parse_uuid_entry() {
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let s = EnvSpec::parse(&format!("TOK={uuid}#password")).unwrap();
+        assert_eq!(s.entry, uuid);
+        assert_eq!(s.field.as_deref(), Some("password"));
+    }
+
+    #[test]
+    fn env_spec_parse_uri_entry() {
+        let s = EnvSpec::parse("PW=https://github.com").unwrap();
+        assert_eq!(s.entry, "https://github.com");
+        assert_eq!(s.field, None);
+    }
+
+    #[test]
+    fn env_spec_parse_rejects_missing_eq() {
+        let err = EnvSpec::parse("FOO").unwrap_err().to_string();
+        assert!(err.contains("expected VAR=ENTRY"), "got: {err}");
+    }
+
+    #[test]
+    fn env_spec_parse_rejects_empty_var() {
+        let err = EnvSpec::parse("=foo").unwrap_err().to_string();
+        assert!(err.contains("empty env var"), "got: {err}");
+    }
+
+    #[test]
+    fn env_spec_parse_rejects_empty_entry() {
+        let err = EnvSpec::parse("FOO=").unwrap_err().to_string();
+        assert!(err.contains("empty entry"), "got: {err}");
+    }
+
+    #[test]
+    fn env_spec_parse_rejects_leading_digit() {
+        let err = EnvSpec::parse("1FOO=bar").unwrap_err().to_string();
+        assert!(err.contains("not a valid env var name"), "got: {err}");
+    }
+
+    #[test]
+    fn env_spec_parse_rejects_invalid_chars() {
+        let err = EnvSpec::parse("FOO-BAR=baz").unwrap_err().to_string();
+        assert!(err.contains("not a valid env var name"), "got: {err}");
+    }
+
+    #[test]
+    fn env_spec_parse_empty_field_is_treated_as_no_field() {
+        // Trailing '#' with no field name is a no-op; defaulting to
+        // `password` later keeps the syntax forgiving.
+        let s = EnvSpec::parse("X=foo#").unwrap();
+        assert_eq!(s.entry, "foo#");
+        assert_eq!(s.field, None);
+    }
 
     #[test]
     fn format_rfc3339_epoch() {

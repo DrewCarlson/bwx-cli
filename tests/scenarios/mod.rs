@@ -6,6 +6,7 @@ pub mod config;
 pub mod config_rejects_invalid_values;
 pub mod db_file_is_encrypted;
 pub mod edit_remove;
+pub mod exec;
 pub mod external_create_then_sync;
 pub mod file_permissions;
 pub mod folders;
