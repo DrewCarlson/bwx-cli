@@ -182,5 +182,21 @@ jobs:
             echo "::notice::PR for $branch already exists — diff was force-pushed"
           fi
 
-          gh pr merge --repo "$TAP_REPO" --squash --auto "$branch" \
-            || echo "::warning::auto-merge could not be enabled (is 'Allow auto-merge' on in $TAP_REPO settings?)"
+          # Try auto-merge first so any future tap-side CI gates the
+          # release; if the target branch isn't protected (nothing to
+          # wait for) GitHub refuses with
+          # "Protected branch rules not configured for this branch" —
+          # fall back to an immediate squash in that case. Any other
+          # failure surfaces as a warning so the PR is left open.
+          merge_log="$RUNNER_TEMP/merge.log"
+          if gh pr merge --repo "$TAP_REPO" --squash --auto "$branch" \
+               2>"$merge_log"; then
+            echo "auto-merge enabled for $branch"
+          elif grep -q 'Protected branch rules not configured' "$merge_log"; then
+            echo "::notice::no branch protection on $TAP_REPO@main — merging immediately"
+            gh pr merge --repo "$TAP_REPO" --squash "$branch"
+          else
+            echo "::warning::could not enable auto-merge:"
+            cat "$merge_log"
+            echo "PR left open for manual merge."
+          fi
