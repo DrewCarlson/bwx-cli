@@ -164,7 +164,7 @@ jobs:
       # CLI binaries inside a tarball there's nothing to staple — the
       # ticket is recorded server-side and Gatekeeper validates online
       # the first time the user runs the binary out of quarantine.
-      - name: Notarize macOS tarball
+      - name: Notarize macOS binaries
         if: runner.os == 'macOS' && env.MACOS_NOTARIZATION_API_KEY_P8 != ''
         env:
           MACOS_NOTARIZATION_API_KEY_ID:        ${{ secrets.MACOS_NOTARIZATION_API_KEY_ID }}
@@ -175,29 +175,43 @@ jobs:
           KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
           printf '%s' "$MACOS_NOTARIZATION_API_KEY_P8" | base64 --decode > "$KEY_PATH"
 
-          # `notarytool submit --wait` blocks until Apple's service
-          # finishes; typical turnaround is < 1 minute for a bare CLI.
-          for tarball in dist/*.tar.gz; do
-            echo "submitting $tarball for notarization"
-            xcrun notarytool submit "$tarball" \
+          # notarytool only accepts .zip / .pkg / .dmg as upload
+          # containers, but the notarization ticket is bound to the
+          # individual binaries' hashes — not the container format.
+          # So: bundle the signed binaries into an ephemeral .zip,
+          # submit that to Apple, then throw the zip away. The
+          # original .tar.gz that users download still passes
+          # Gatekeeper because the binaries inside it match the
+          # hashes Apple just notarized.
+          zip_path="$RUNNER_TEMP/bwx-notarize-${{ matrix.target }}.zip"
+          # `zip -j` flattens paths so the archive contains just the
+          # two signed Mach-O files at the top level — exactly what
+          # notarytool wants to inspect.
+          /usr/bin/zip -j "$zip_path" \
+            "target/${{ matrix.target }}/release/bwx" \
+            "target/${{ matrix.target }}/release/bwx-agent"
+
+          echo "submitting $zip_path for notarization"
+          xcrun notarytool submit "$zip_path" \
+            --key "$KEY_PATH" \
+            --key-id "$MACOS_NOTARIZATION_API_KEY_ID" \
+            --issuer "$MACOS_NOTARIZATION_API_KEY_ISSUER_ID" \
+            --wait \
+            --output-format json \
+            | tee "$RUNNER_TEMP/notary.json"
+          status="$(jq -r '.status' "$RUNNER_TEMP/notary.json")"
+          if [ "$status" != "Accepted" ]; then
+            # Pull the log so failures are debuggable.
+            submission_id="$(jq -r '.id' "$RUNNER_TEMP/notary.json")"
+            xcrun notarytool log "$submission_id" \
               --key "$KEY_PATH" \
               --key-id "$MACOS_NOTARIZATION_API_KEY_ID" \
-              --issuer "$MACOS_NOTARIZATION_API_KEY_ISSUER_ID" \
-              --wait \
-              --output-format json \
-              | tee "$RUNNER_TEMP/notary.json"
-            status="$(jq -r '.status' "$RUNNER_TEMP/notary.json")"
-            if [ "$status" != "Accepted" ]; then
-              # Pull the log so failures are debuggable.
-              submission_id="$(jq -r '.id' "$RUNNER_TEMP/notary.json")"
-              xcrun notarytool log "$submission_id" \
-                --key "$KEY_PATH" \
-                --key-id "$MACOS_NOTARIZATION_API_KEY_ID" \
-                --issuer "$MACOS_NOTARIZATION_API_KEY_ISSUER_ID"
-              echo "::error::notarization failed: $status"
-              exit 1
-            fi
-          done
+              --issuer "$MACOS_NOTARIZATION_API_KEY_ISSUER_ID"
+            echo "::error::notarization failed: $status"
+            exit 1
+          fi
+
+          rm -f "$zip_path"
           shred -u "$KEY_PATH"
 
       - name: Tear down signing keychain
