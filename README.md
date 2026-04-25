@@ -37,15 +37,45 @@ bwx setup-macos               # LaunchAgents + SSH_AUTH_SOCK for GUI apps
 
 ### Everywhere else
 
-| Platform        | Command                                       |
-|-----------------|-----------------------------------------------|
-| Arch            | `pacman -S bwx` (or `bwx-git` from AUR)       |
-| Debian / Ubuntu | `apt install bwx`                             |
-| Fedora / EPEL   | `dnf install bwx`                             |
-| Homebrew        | `brew install bwx`                            |
-| Nix             | `nix-shell -p bwx`                            |
-| Alpine          | `apk add bwx`                                 |
-| From source     | `cargo install --locked bwx-cli` + `pinentry` |
+| Channel                  | Command                                                                            |
+|--------------------------|------------------------------------------------------------------------------------|
+| crates.io (any platform) | `cargo install --locked bwx-cli` (binaries are `bwx` / `bwx-agent`)                |
+| Arch (AUR — release)     | `yay -S bwx-cli` (or any AUR helper)                                               |
+| Arch (AUR — git)         | `yay -S bwx-cli-git`                                                               |
+| Nix flake                | `nix profile install github:drewcarlson/bwx-cli`                                   |
+| Debian / Ubuntu (`.deb`) | download from [GitHub Releases][rel] → `sudo dpkg -i bwx-cli_*_amd64.deb`          |
+| Fedora / RHEL (`.rpm`)   | download from [GitHub Releases][rel] → `sudo dnf install ./bwx-cli-*.x86_64.rpm`   |
+| Standalone tarball       | download from [GitHub Releases][rel], extract, put `bwx`/`bwx-agent` on PATH       |
+
+[rel]: https://github.com/drewcarlson/bwx-cli/releases
+
+Each tagged release builds Linux `x86_64` + `aarch64` (glibc and musl)
+and macOS `arm64` + `x86_64` artifacts, attached to the GitHub Release.
+On Linux you'll also want `pinentry` from your distro so the
+master-password prompt has a UI.
+
+### Verifying release artifacts
+
+Every artifact carries a SLSA build-provenance attestation (signed
+with the release workflow's GitHub OIDC identity, recorded in the
+sigstore rekor transparency log) plus, when the maintainer's minisign
+secret is configured, a `.minisig` backup.
+
+```sh
+# GitHub-native attestation verify. Confirms the artifact was built
+# by the bwx-cli release workflow on a tagged commit; no local key
+# to install. Requires the `gh` CLI.
+gh attestation verify bwx-cli_2.0.0_amd64.deb \
+  --repo drewcarlson/bwx-cli
+
+# Minisign — single shipped pubkey at packaging/minisign.pub.
+minisign -V -p packaging/minisign.pub \
+  -m bwx-cli_2.0.0_amd64.deb
+
+# `SHA256SUMS` covers every file in the release; verify it once,
+# then check artifacts against it.
+sha256sum -c SHA256SUMS
+```
 
 ## Usage
 

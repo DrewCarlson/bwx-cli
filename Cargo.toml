@@ -182,3 +182,19 @@ assets = [
         "644",
     ],
 ]
+
+# `cargo generate-rpm` reads this section. Mirrors the deb layout so
+# `dnf install ./bwx-cli-*.rpm` lands the same files the Debian package
+# would. `pinentry` is the Fedora package name as well.
+[package.metadata.generate-rpm]
+license = "MIT"
+requires = { pinentry = "*" }
+assets = [
+    { source = "target/release/bwx",       dest = "/usr/bin/bwx",       mode = "755" },
+    { source = "target/release/bwx-agent", dest = "/usr/bin/bwx-agent", mode = "755" },
+    { source = "target/release/completion/bash", dest = "/usr/share/bash-completion/completions/bwx",     mode = "644" },
+    { source = "target/release/completion/zsh",  dest = "/usr/share/zsh/site-functions/_bwx",             mode = "644" },
+    { source = "target/release/completion/fish", dest = "/usr/share/fish/vendor_completions.d/bwx.fish",  mode = "644" },
+    { source = "LICENSE",   dest = "/usr/share/licenses/bwx-cli/LICENSE", mode = "644", doc = true },
+    { source = "README.md", dest = "/usr/share/doc/bwx-cli/README.md",    mode = "644", doc = true },
+]

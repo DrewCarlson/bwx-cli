@@ -83,9 +83,35 @@ if [ -z "$TEAM_ID" ]; then
 fi
 
 echo "signing mode: $IDENTITY_STR (biometric-ACL Keychain path)"
+
+# `HARDENED_RUNTIME=1` opts the binary into Apple's hardened runtime
+# (`codesign --options runtime`), required for notarization. We also
+# add the `allow-unsigned-executable-memory` entitlement so AMFI
+# doesn't kill the Rust binary on first run — Rust's allocator + a
+# few crates touch executable pages in ways the strict default
+# rejects. Local dev (no env var) skips both, matching the previous
+# behaviour.
 ENTITLEMENTS="$(mktemp -t bwx-entitlements).plist"
 trap "rm -f '$ENTITLEMENTS'" EXIT
-cat > "$ENTITLEMENTS" <<EOF
+if [ "${HARDENED_RUNTIME:-0}" = "1" ]; then
+  cat > "$ENTITLEMENTS" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>keychain-access-groups</key>
+  <array>
+    <string>${TEAM_ID}.bwx</string>
+  </array>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+</dict>
+</plist>
+EOF
+  HR_FLAG="--options=runtime"
+else
+  cat > "$ENTITLEMENTS" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -98,18 +124,22 @@ cat > "$ENTITLEMENTS" <<EOF
 </dict>
 </plist>
 EOF
+  HR_FLAG=""
+fi
 
 for name in bwx bwx-agent; do
   bin="$BIN_DIR/$name"
   [ -x "$bin" ] || continue
-  # Note: no `--options runtime` — Rust binaries can trip AMFI's
-  # hardened runtime executable-memory checks. We still get the
-  # keychain-access-groups entitlement honored without it.
-  codesign --force --entitlements "$ENTITLEMENTS" \
+  # shellcheck disable=SC2086
+  codesign --force $HR_FLAG --timestamp \
+           --entitlements "$ENTITLEMENTS" \
            --sign "$IDENTITY_STR" "$bin"
   echo "  signed: $bin"
 done
 
 echo ""
 echo "access group: ${TEAM_ID}.bwx"
+if [ "${HARDENED_RUNTIME:-0}" = "1" ]; then
+  echo "hardened runtime: on (notarization-ready)"
+fi
 echo "bwx touchid enroll will use a biometric-ACL Keychain item."

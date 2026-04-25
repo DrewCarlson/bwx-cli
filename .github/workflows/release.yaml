@@ -1,0 +1,313 @@
+name: release
+
+# Triggered on a vN.N.N tag push. Builds the same binaries we test in
+# `tests.yaml`, then packages them as standalone tarballs (always),
+# `.deb` (Linux glibc only), and `.rpm` (Linux glibc only). Everything
+# is attached to the GitHub Release for the tag.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Manual trigger so we can dry-run the matrix without cutting a tag.
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # needed to upload assets to a GitHub Release
+  id-token: write   # needed for sigstore (cosign) keyless signing OIDC token
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            packager: deb-rpm
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            packager: deb-rpm
+            cross: true
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            packager: tarball
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-latest
+            packager: tarball
+            cross: true
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            packager: tarball
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            packager: tarball
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation toolchain (Linux only)
+        if: matrix.cross == true
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Install musl toolchain
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get install -y musl-tools clang-18
+
+      - name: Install cargo-deb / cargo-generate-rpm
+        if: matrix.packager == 'deb-rpm'
+        uses: cargo-bins/cargo-binstall@dc19f1e48450eefe5a29b8da6c6b00a87d730b37 # v1.18.1
+      - if: matrix.packager == 'deb-rpm'
+        run: cargo binstall --no-confirm cargo-deb cargo-generate-rpm
+
+      - name: Build release binaries
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # ---- macOS code-signing (Developer ID Application) ----
+      # Imports the maintainer's .p12 cert into a per-job tmp keychain,
+      # signs both binaries with hardened runtime + entitlements, then
+      # tears the keychain down.
+      - name: Import Developer ID certificate
+        if: runner.os == 'macOS'
+        env:
+          MACOS_DEVELOPER_ID_CERT_P12:      ${{ secrets.MACOS_DEVELOPER_ID_CERT_P12 }}
+          MACOS_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Random password just for the temporary keychain — this
+          # keychain is destroyed at job-end, so it never leaves the
+          # runner.
+          KEYCHAIN_PW="$(openssl rand -hex 16)"
+          KEYCHAIN_PATH="$RUNNER_TEMP/bwx-signing.keychain-db"
+          P12_PATH="$RUNNER_TEMP/bwx-developer-id.p12"
+
+          printf '%s' "$MACOS_DEVELOPER_ID_CERT_P12" | base64 --decode > "$P12_PATH"
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN_PATH"
+          security import "$P12_PATH" -k "$KEYCHAIN_PATH" \
+            -P "$MACOS_DEVELOPER_ID_CERT_PASSWORD" \
+            -T /usr/bin/codesign
+          # `set-key-partition-list` lets `codesign` use the imported
+          # key without a GUI prompt.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PW" "$KEYCHAIN_PATH"
+          # Prepend our keychain to the search list so `find-identity`
+          # in sign-macos.sh sees it.
+          security list-keychains -d user -s "$KEYCHAIN_PATH" \
+            $(security list-keychains -d user | tr -d '"')
+
+          # Persist for cleanup + later steps.
+          echo "BWX_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          rm -f "$P12_PATH"
+
+      - name: Code-sign macOS binaries (Developer ID, hardened runtime)
+        if: runner.os == 'macOS' && env.BWX_KEYCHAIN_PATH != ''
+        env:
+          HARDENED_RUNTIME: "1"
+        run: |
+          ./scripts/sign-macos.sh "target/${{ matrix.target }}/release"
+
+      - name: Generate shell completions
+        run: |
+          mkdir -p target/${{ matrix.target }}/release/completion
+          BWX=target/${{ matrix.target }}/release/bwx
+          # On the cross / musl builds the binary won't run on the
+          # host (different libc / arch), so fall back to a host build
+          # purely for completion generation.
+          if ! "$BWX" --version >/dev/null 2>&1; then
+            cargo build --release --bin bwx
+            BWX=target/release/bwx
+          fi
+          "$BWX" gen-completions bash > target/${{ matrix.target }}/release/completion/bash
+          "$BWX" gen-completions zsh  > target/${{ matrix.target }}/release/completion/zsh
+          "$BWX" gen-completions fish > target/${{ matrix.target }}/release/completion/fish
+
+      - name: Stage standalone tarball
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          [ -n "$ver" ] || ver="dev"
+          stage="bwx-cli-${ver}-${{ matrix.target }}"
+          mkdir -p "dist/$stage/completion"
+          cp "target/${{ matrix.target }}/release/bwx"        "dist/$stage/"
+          cp "target/${{ matrix.target }}/release/bwx-agent"  "dist/$stage/"
+          cp target/${{ matrix.target }}/release/completion/* "dist/$stage/completion/"
+          cp README.md LICENSE CHANGELOG.md                   "dist/$stage/"
+          tar -C dist -czf "dist/${stage}.tar.gz" "$stage"
+          rm -rf "dist/$stage"
+
+      - name: Build .deb + .rpm
+        if: matrix.packager == 'deb-rpm'
+        run: |
+          # cargo-deb / cargo-generate-rpm both expect target/release/...
+          # — point them at the per-target dir we actually built into.
+          cargo deb --no-build --target ${{ matrix.target }} --output dist/
+          cargo generate-rpm --target ${{ matrix.target }} --output dist/
+
+      # ---- macOS notarization ----
+      # After signing + tarball staging, submit each tarball to Apple's
+      # Notary Service via `notarytool` with an App Store Connect API
+      # key (preferred over Apple-ID + app-specific password). For bare
+      # CLI binaries inside a tarball there's nothing to staple — the
+      # ticket is recorded server-side and Gatekeeper validates online
+      # the first time the user runs the binary out of quarantine.
+      - name: Notarize macOS tarball
+        if: runner.os == 'macOS' && env.MACOS_NOTARIZATION_API_KEY_P8 != ''
+        env:
+          MACOS_NOTARIZATION_API_KEY_ID:        ${{ secrets.MACOS_NOTARIZATION_API_KEY_ID }}
+          MACOS_NOTARIZATION_API_KEY_ISSUER_ID: ${{ secrets.MACOS_NOTARIZATION_API_KEY_ISSUER_ID }}
+          MACOS_NOTARIZATION_API_KEY_P8:        ${{ secrets.MACOS_NOTARIZATION_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$MACOS_NOTARIZATION_API_KEY_P8" | base64 --decode > "$KEY_PATH"
+
+          # `notarytool submit --wait` blocks until Apple's service
+          # finishes; typical turnaround is < 1 minute for a bare CLI.
+          for tarball in dist/*.tar.gz; do
+            echo "submitting $tarball for notarization"
+            xcrun notarytool submit "$tarball" \
+              --key "$KEY_PATH" \
+              --key-id "$MACOS_NOTARIZATION_API_KEY_ID" \
+              --issuer "$MACOS_NOTARIZATION_API_KEY_ISSUER_ID" \
+              --wait \
+              --output-format json \
+              | tee "$RUNNER_TEMP/notary.json"
+            status="$(jq -r '.status' "$RUNNER_TEMP/notary.json")"
+            if [ "$status" != "Accepted" ]; then
+              # Pull the log so failures are debuggable.
+              submission_id="$(jq -r '.id' "$RUNNER_TEMP/notary.json")"
+              xcrun notarytool log "$submission_id" \
+                --key "$KEY_PATH" \
+                --key-id "$MACOS_NOTARIZATION_API_KEY_ID" \
+                --issuer "$MACOS_NOTARIZATION_API_KEY_ISSUER_ID"
+              echo "::error::notarization failed: $status"
+              exit 1
+            fi
+          done
+          shred -u "$KEY_PATH"
+
+      - name: Tear down signing keychain
+        if: always() && runner.os == 'macOS' && env.BWX_KEYCHAIN_PATH != ''
+        run: |
+          security delete-keychain "$BWX_KEYCHAIN_PATH" || true
+          rm -f "$BWX_KEYCHAIN_PATH"
+
+      - name: Upload artifacts to workflow run
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bwx-cli-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Attach to GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write   # cosign keyless OIDC
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Compute checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS
+
+      # ---- SLSA build provenance attestation (sigstore-backed) ----
+      # `actions/attest-build-provenance` records an in-toto SLSA
+      # provenance statement for every artifact. The attestation is
+      # signed with this workflow's GitHub OIDC identity, recorded in
+      # the rekor transparency log, and stored on the repo so users
+      # can verify with `gh attestation verify <file> --repo …` —
+      # no local key, no extra .sig files to ship.
+      - name: Attest build provenance for all release artifacts
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: 'dist/*'
+
+      # ---- Minisign signatures ----
+      # Single ed25519 key the maintainer holds; pubkey is checked
+      # into the repo at packaging/minisign.pub. Easier end-user
+      # verify (`minisign -V -p minisign.pub -m <file>`).
+      - name: Sign all release artifacts with minisign
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          MINISIGN_PASSWORD:    ${{ secrets.MINISIGN_PASSWORD }}
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y minisign
+          # Stage the private key in a tmpfs file with 0o600 mode.
+          keyfile="$(mktemp)"
+          chmod 600 "$keyfile"
+          printf '%s\n' "$MINISIGN_PRIVATE_KEY" > "$keyfile"
+          shopt -s nullglob
+          for f in *; do
+            case "$f" in *.minisig|SHA256SUMS) continue ;; esac
+            minisign -S -s "$keyfile" \
+              -t "bwx-cli ${GITHUB_REF_NAME} — $(basename "$f")" \
+              -m "$f" -x "${f}.minisig" \
+              <<<"$MINISIGN_PASSWORD"
+          done
+          # Sign the checksum file too so a single .minisig covers the
+          # whole artifact set in one verify.
+          minisign -S -s "$keyfile" \
+            -t "bwx-cli ${GITHUB_REF_NAME} — SHA256SUMS" \
+            -m SHA256SUMS -x SHA256SUMS.minisig \
+            <<<"$MINISIGN_PASSWORD"
+          shred -u "$keyfile"
+
+      - name: Create / update Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --notes-file CHANGELOG.md --draft
+          fi
+          gh release upload "$tag" dist/* --clobber
+
+  crates-publish:
+    name: cargo publish
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Publish bwx-cli to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -o pipefail
+          log=$(mktemp)
+          if cargo publish --locked 2>&1 | tee "$log"; then
+            echo "published to crates.io"
+            exit 0
+          fi
+          if grep -qiE 'crate version .* is already uploaded|already (exists|published)' "$log"; then
+            echo "::notice::version already on crates.io — skipping"
+            exit 0
+          fi
+          echo "::error::cargo publish failed for a reason other than 'already uploaded'"
+          exit 1
