@@ -2302,6 +2302,7 @@ fn do_setup_macos(force: bool) -> bin_error::Result<()> {
          they are fully quit (Cmd-Q) and relaunched. Terminal sessions \
          started after this point will see SSH_AUTH_SOCK automatically."
     );
+    println!("Append to your bashrc/zshrc:\n\n export SSH_AUTH_SOCK=\"$(bwx ssh-socket)\"");
     Ok(())
 }
 
