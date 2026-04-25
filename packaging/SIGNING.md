@@ -3,11 +3,11 @@
 Each tag triggers a release pipeline that produces signed,
 provenance-stamped artifacts. The integrity story has three layers:
 
-| Layer                          | What it gives you                                                                                       | Maintainer setup                                  |
-|--------------------------------|---------------------------------------------------------------------------------------------------------|---------------------------------------------------|
-| SLSA build provenance          | Cryptographic attestation that the artifact was built by *this* repo's release workflow on a tag       | None — runs automatically via GitHub OIDC         |
-| Minisign signature             | Maintainer-owned signature anyone can verify against a single shipped pubkey                            | Two repo secrets + commit `packaging/minisign.pub` |
-| Tag protection + Immutable Releases | Once published, the tag and release assets cannot be moved, deleted, or rewritten                  | Two repo settings (manual one-time)               |
+| Layer                               | What it gives you                                                                                  |
+|-------------------------------------|----------------------------------------------------------------------------------------------------|
+| SLSA build provenance               | Cryptographic attestation that the artifact was built by *this* repo's release workflow on a tag |
+| Minisign signature                  | Project-owned ed25519 signature anyone can verify against the shipped pubkey                      |
+| Tag protection + Immutable Releases | Once published, the tag and release assets cannot be moved, deleted, or rewritten                 |
 
 Each layer is independent: any one of them is enough to detect an
 artifact swap, and verifying all three is cheap.
@@ -71,8 +71,7 @@ installed.
 4. **Back up `~/.bwx-minisign.key`** somewhere offline.
 
 After this, every release adds `<artifact>.minisig` files alongside
-the artifacts. Until completed, the minisign step in CI is silently
-skipped — the SLSA attestations carry the integrity story alone.
+the artifacts.
 
 ### Verifying as a user
 
@@ -100,10 +99,6 @@ already tied to the workflow run's transient identity.
 CI also signs and notarizes the macOS tarballs so users can run
 `bwx`/`bwx-agent` straight from a notarized download without
 Gatekeeper prompts. Requires a paid Apple Developer account.
-
-This layer is independent of layers 1–2: skip it (don't set the
-secrets) and macOS users get an unsigned tarball that they can still
-install manually with `xattr -d com.apple.quarantine` after download.
 
 ### One-time setup
 

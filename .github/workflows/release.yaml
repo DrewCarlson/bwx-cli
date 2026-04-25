@@ -14,7 +14,7 @@ on:
 
 permissions:
   contents: write   # needed to upload assets to a GitHub Release
-  id-token: write   # needed for sigstore (cosign) keyless signing OIDC token
+  id-token: write   # OIDC token for sigstore-backed build provenance
 
 env:
   RUST_BACKTRACE: 1
@@ -99,7 +99,7 @@ jobs:
           "$BWX" gen-completions fish > target/${{ matrix.target }}/release/completion/fish
 
       # ---- macOS code-signing (Developer ID Application) ----
-      # Imports the maintainer's .p12 cert into a per-job tmp keychain,
+      # Imports the Developer ID .p12 cert into a per-job tmp keychain,
       # signs both binaries with hardened runtime + entitlements, then
       # tears the keychain down.
       - name: Import Developer ID certificate
@@ -166,12 +166,12 @@ jobs:
           cargo generate-rpm --target ${{ matrix.target }} --output dist/
 
       # ---- macOS notarization ----
-      # After signing + tarball staging, submit each tarball to Apple's
-      # Notary Service via `notarytool` with an App Store Connect API
-      # key (preferred over Apple-ID + app-specific password). For bare
-      # CLI binaries inside a tarball there's nothing to staple — the
-      # ticket is recorded server-side and Gatekeeper validates online
-      # the first time the user runs the binary out of quarantine.
+      # Submit the signed binaries to Apple's Notary Service via
+      # `notarytool` with an App Store Connect API key. For bare CLI
+      # binaries inside a tarball there's nothing to staple — the
+      # notarization ticket is recorded server-side and Gatekeeper
+      # validates online the first time the user runs the binary out
+      # of quarantine.
       - name: Notarize macOS binaries
         if: runner.os == 'macOS' && env.MACOS_NOTARIZATION_API_KEY_P8 != ''
         env:
@@ -259,21 +259,19 @@ jobs:
         run: sha256sum * > SHA256SUMS
 
       # ---- SLSA build provenance attestation (sigstore-backed) ----
-      # `actions/attest-build-provenance` records an in-toto SLSA
-      # provenance statement for every artifact. The attestation is
-      # signed with this workflow's GitHub OIDC identity, recorded in
-      # the rekor transparency log, and stored on the repo so users
-      # can verify with `gh attestation verify <file> --repo …` —
-      # no local key, no extra .sig files to ship.
+      # Records an in-toto SLSA provenance statement for every
+      # artifact, signed with this workflow's GitHub OIDC identity
+      # and recorded in the rekor transparency log. Users verify with
+      # `gh attestation verify <file> --repo …`.
       - name: Attest build provenance for all release artifacts
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-path: 'dist/*'
 
       # ---- Minisign signatures ----
-      # Single ed25519 key the maintainer holds; pubkey is checked
-      # into the repo at packaging/minisign.pub. Easier end-user
-      # verify (`minisign -V -p minisign.pub -m <file>`).
+      # ed25519 signature against the project key whose pubkey is
+      # checked in at `packaging/minisign.pub`. Verified by
+      # `minisign -V -p minisign.pub -m <file>`.
       - name: Sign all release artifacts with minisign
         env:
           MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}

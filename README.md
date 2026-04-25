@@ -6,7 +6,7 @@ every use, similar to `ssh-agent`.
 
 This fork adds first-class macOS support: Touch ID unlock, native
 password dialogs, SSH commit signing, and a one-shot setup command.
-On Linux/BSD it's a drop-in replacement for upstream bwx.
+On Linux/BSD it's a drop-in replacement for upstream `rbw`.
 
 ## Features
 
@@ -21,9 +21,10 @@ On Linux/BSD it's a drop-in replacement for upstream bwx.
   system Aqua dialogs; pinentry isn't required.
 - **SSH agent built in.** Serve vault-stored SSH keys, including git
   commit/tag signing via `gpg.format = ssh`.
-- **GUI-app integration.** `bwx setup-macos` wires `SSH_AUTH_SOCK` into
-  launchd so IntelliJ, GitHub Desktop, Finder-launched tools, etc. see
-  the agent without per-app config.
+- **One-shot macOS setup.** `bwx setup-macos` installs the LaunchAgent
+  that keeps `bwx-agent` alive and registers the SSH-agent socket so
+  terminal sessions (and the GUI apps they launch) can use it via a
+  one-line shell-rc export.
 
 ## Install
 
@@ -59,8 +60,7 @@ master-password prompt has a UI.
 
 Every artifact carries a SLSA build-provenance attestation (signed
 with the release workflow's GitHub OIDC identity, recorded in the
-sigstore rekor transparency log) plus, when the maintainer's minisign
-secret is configured, a `.minisig` backup.
+sigstore rekor transparency log) plus a `.minisig` signature.
 
 ```sh
 # GitHub-native attestation verify. Confirms the artifact was built
@@ -166,10 +166,17 @@ against a process silently signing while the agent is unlocked):
 bwx config set ssh_confirm_sign true
 ```
 
-**GUI git clients** (IntelliJ, GitHub Desktop) only see
-`SSH_AUTH_SOCK` from launchd's environment, which is what
-`bwx setup-macos` populates. After running it, Cmd-Q any already-open
-editor and relaunch — they only pick up the new env on launch.
+**Shell + GUI app inheritance.** Modern macOS no longer propagates
+`launchctl setenv` into the env of Dock- / Spotlight-launched apps.
+Add this line to your shell rc so terminal sessions and the apps
+they launch see the bwx ssh-agent:
+
+```sh
+export SSH_AUTH_SOCK="$(bwx ssh-socket)"   # ~/.zshrc, ~/.bashrc, …
+```
+
+GUI apps that were already open need to be Cmd-Q'd and relaunched
+(so their env is re-inherited from the shell) before they pick it up.
 
 **IntelliJ IDEs specifically:** Settings → Version Control → Git →
 "Native" (not Built-in). JGit doesn't honor `gpg.format = ssh`.

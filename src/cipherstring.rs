@@ -294,8 +294,6 @@ fn pkcs7_pad(buf: &mut Vec<u8>, block_size: usize) {
     buf.resize(buf.len() + pad_len, pad_val);
 }
 
-// XXX this should ideally just be block_padding::Pkcs7::unpad, but i can't
-// figure out how to get the generic types to work out
 fn pkcs7_unpad(b: &[u8]) -> Option<&[u8]> {
     if b.is_empty() {
         return None;

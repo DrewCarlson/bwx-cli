@@ -1,9 +1,9 @@
 name: homebrew-bump
 
 # Triggered after `release.yaml` finishes successfully on a tag push.
-# Computes SHA256s for the four target tarballs we expose to Homebrew
+# Computes SHA256s for the four target tarballs exposed to Homebrew
 # (macOS arm64/x86_64, Linux musl arm64/x86_64), rewrites the formula
-# template, opens a PR against the maintainer's shared tap repo
+# template, opens a PR against the shared tap repo
 # (`DrewCarlson/homebrew-tap`), and enables auto-merge so the new
 # version goes live as soon as any tap-side checks pass.
 

@@ -1,9 +1,10 @@
 # Homebrew distribution
 
-`bwx-cli` is published through the maintainer's shared personal tap
-at **[`DrewCarlson/homebrew-tap`](https://github.com/DrewCarlson/homebrew-tap)**.
-That tap is used for *all* of the maintainer's tools (`ktpack`,
-`bwx-cli`, …), one formula file per project under `Formula/`.
+`bwx-cli` is published through the shared personal tap at
+**[`DrewCarlson/homebrew-tap`](https://github.com/DrewCarlson/homebrew-tap)**.
+That tap holds every Homebrew-distributed project from this account
+(`ktpack`, `bwx-cli`, …), one formula file per project under
+`Formula/`.
 
 End users install with:
 
@@ -89,9 +90,6 @@ waits for those.
 After merge, `brew update && brew upgrade bwx-cli` picks up the new
 version with no further intervention.
 
-If `HOMEBREW_TAP_TOKEN` isn't set the workflow logs a notice and
-exits successfully — first runs and forks aren't blocked.
-
 ---
 
 ## Verifying a PR locally before merging
@@ -111,25 +109,3 @@ brew uninstall bwx-cli   # leave no trace once you're done verifying
 formula it just downloads + verifies the tarball + sha256, then runs
 the `install` and `test` blocks. Catches any issue before it lands
 on real users.
-
----
-
-## Submitting to homebrew-core (later)
-
-Once `bwx-cli` has visible adoption (~75 GitHub stars or active
-discussion is the typical bar), you can PR the formula into
-homebrew/homebrew-core so users get it without the personal tap.
-The formula structure stays the same; the differences:
-
-- homebrew-core requires building from source by default. Add a
-  `head "https://github.com/drewcarlson/bwx-cli.git", branch: "main"`
-  block plus `depends_on "rust" => :build` and an
-  `system "cargo", "install", *std_cargo_args` install step. Keep
-  binary URLs as a separate "bottle" hosted on Homebrew's CDN once
-  upstream agrees to bottle it.
-- Drop the auto-generated header comment in `bwx-cli.rb`.
-- Run `brew audit --strict --new bwx-cli` and `brew test bwx-cli`
-  locally; both must pass before submission.
-
-Until then, the personal tap above gives users the same one-line
-install with no maintainer overhead beyond CI tagging.
