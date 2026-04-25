@@ -11,12 +11,25 @@ on:
   workflow_run:
     workflows: ["release"]
     types: [completed]
+  # Manual trigger so a botched bump can be re-driven without
+  # cutting another tag. With no input it picks up the latest
+  # GitHub Release; pass an explicit `tag` (e.g. `v2.0.2`) to
+  # target a specific release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to bump (e.g. v2.0.2). Leave blank for latest.'
+        required: false
+        default: ''
 
 jobs:
   bump:
+    # Run on every manual dispatch, and on workflow_run only when
+    # the upstream `release` job succeeded for a `v*` tag.
     if: >
-      github.event.workflow_run.conclusion == 'success' &&
-      startsWith(github.event.workflow_run.head_branch, 'v')
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
     env:
       TAP_REPO: DrewCarlson/homebrew-tap
@@ -27,8 +40,21 @@ jobs:
 
       - name: Resolve tag + version
         id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          tag="${{ github.event.workflow_run.head_branch }}"
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+            if [ -z "$tag" ]; then
+              # No input → pick up the most recent published release.
+              tag=$(gh release view --repo "${{ github.repository }}" \
+                      --json tagName -q .tagName)
+              echo "::notice::manual run, no tag input — defaulting to latest release $tag"
+            fi
+          else
+            tag="${{ github.event.workflow_run.head_branch }}"
+          fi
           ver="${tag#v}"
           # Skip prereleases — `brew install` resolves to the stable
           # release; bumping the formula on every rc would point users
@@ -38,8 +64,8 @@ jobs:
             echo "skip=1" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "tag=$tag"  >> "$GITHUB_OUTPUT"
-          echo "ver=$ver"  >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
 
       - name: Download SHA256SUMS from the release
         if: steps.ver.outputs.skip != '1'
@@ -113,12 +139,17 @@ jobs:
           mkdir -p Formula
           cp ../staging/${FORMULA_NAME}.rb Formula/${FORMULA_NAME}.rb
 
-          if git diff --quiet Formula/${FORMULA_NAME}.rb; then
+          # Stage first, then compare the index against HEAD. The
+          # previous `git diff --quiet <path>` form ignores untracked
+          # files, so the very first time we publish a formula (no
+          # entry on main yet) it would falsely report "nothing to
+          # commit" and bail.
+          git add Formula/${FORMULA_NAME}.rb
+          if git diff --quiet --cached HEAD -- Formula/${FORMULA_NAME}.rb; then
             echo "::notice::formula already up to date for v$ver — nothing to PR"
             exit 0
           fi
 
-          git add Formula/${FORMULA_NAME}.rb
           git commit -m "${FORMULA_NAME} ${ver}" \
                      -m "Auto-generated from drewcarlson/bwx-cli@${{ steps.ver.outputs.tag }}."
           git push --force-with-lease origin "$branch"
