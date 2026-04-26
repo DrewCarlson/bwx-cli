@@ -87,13 +87,32 @@ pub(super) fn matches_url(
             }
         }
         bwx::api::UriMatchType::RegularExpression => {
-            let Ok(rx) = regex::Regex::new(url) else {
+            let Some(rx) = compile_regex_cached(url) else {
                 return false;
             };
             rx.is_match(given_url.as_ref())
         }
         bwx::api::UriMatchType::Never => false,
     }
+}
+
+/// Compile a URI-match regex once per CLI invocation. `find_entry_raw`
+/// re-runs its match loop several times with different strict flags, so
+/// the same `url` strings get compared against many ciphers many times
+/// per `bwx get`.
+fn compile_regex_cached(url: &str) -> Option<std::sync::Arc<regex::Regex>> {
+    use std::sync::{Arc, Mutex, OnceLock};
+    static CACHE: OnceLock<
+        Mutex<std::collections::HashMap<String, Option<Arc<regex::Regex>>>>,
+    > = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let mut guard = cache.lock().ok()?;
+    if let Some(entry) = guard.get(url) {
+        return entry.clone();
+    }
+    let compiled = regex::Regex::new(url).ok().map(Arc::new);
+    guard.insert(url.to_string(), compiled.clone());
+    compiled
 }
 
 fn host_port(url: &url::Url) -> Option<String> {
