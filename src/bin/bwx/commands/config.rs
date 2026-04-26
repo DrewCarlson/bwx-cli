@@ -2,6 +2,14 @@ use super::auth::stop_agent;
 use super::util::print_opt;
 use crate::bin_error::{self, ContextExt as _};
 
+fn parse_on_off(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "on" | "true" | "1" | "yes" => Some(true),
+        "off" | "false" | "0" | "no" => Some(false),
+        _ => None,
+    }
+}
+
 pub fn config_show(key: Option<&str>) -> bin_error::Result<()> {
     let config = bwx::config::Config::load()?;
 
@@ -27,6 +35,7 @@ pub fn config_show(key: Option<&str>) -> bin_error::Result<()> {
         "pinentry" => println!("{}", config.pinentry),
         "ssh_confirm_sign" => println!("{}", config.ssh_confirm_sign),
         "macos_unlock_dialog" => println!("{}", config.macos_unlock_dialog),
+        "logging" => println!("{}", config.logging),
         "touchid_gate" => println!("{}", config.touchid_gate),
         other => {
             return Err(crate::bin_error::err!(
@@ -80,6 +89,13 @@ pub fn config_set(key: &str, value: &str) -> bin_error::Result<()> {
                 .parse()
                 .context("macos_unlock_dialog must be 'true' or 'false'")?;
         }
+        "logging" => {
+            config.logging = parse_on_off(value).ok_or_else(|| {
+                crate::bin_error::err!(
+                    "logging must be 'on'/'off' or 'true'/'false'"
+                )
+            })?;
+        }
         "touchid_gate" => {
             let gate: bwx::touchid::Gate =
                 value.parse().map_err(crate::bin_error::Error::msg)?;
@@ -128,6 +144,9 @@ pub fn config_unset(key: &str) -> bin_error::Result<()> {
         "macos_unlock_dialog" => {
             config.macos_unlock_dialog =
                 bwx::config::default_macos_unlock_dialog();
+        }
+        "logging" => {
+            config.logging = bwx::config::default_logging();
         }
         "touchid_gate" => config.touchid_gate = bwx::touchid::Gate::Off,
         _ => return Err(crate::bin_error::err!("invalid config key: {key}")),

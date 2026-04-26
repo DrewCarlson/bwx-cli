@@ -30,6 +30,8 @@ pub struct Config {
     /// fall back to pinentry. No effect on other platforms.
     #[serde(default = "default_macos_unlock_dialog")]
     pub macos_unlock_dialog: bool,
+    #[serde(default = "default_logging")]
+    pub logging: bool,
     #[serde(
         default,
         with = "touchid_gate_serde",
@@ -56,6 +58,7 @@ impl Default for Config {
             client_cert_path: None,
             ssh_confirm_sign: false,
             macos_unlock_dialog: default_macos_unlock_dialog(),
+            logging: default_logging(),
             touchid_gate: crate::touchid::Gate::Off,
             device_id: None,
         }
@@ -76,6 +79,10 @@ pub fn default_pinentry() -> String {
 
 pub const fn default_macos_unlock_dialog() -> bool {
     cfg!(target_os = "macos")
+}
+
+pub const fn default_logging() -> bool {
+    false
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]

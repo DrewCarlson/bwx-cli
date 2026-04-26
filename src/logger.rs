@@ -1,9 +1,22 @@
-//! Minimal RUST_LOG-compatible logger writing `LEVEL: message` to stderr.
+//! Stderr logger gated by a single config boolean.
+//!
+//! When `logging` is `true` (the default), records from our crates at level
+//! `debug` and above (`debug`/`warn`/`error`) are written to stderr. When
+//! `false`, nothing is emitted. Output is restricted to our crates so
+//! third-party libraries don't pollute the terminal.
+//!
+//! `RUST_LOG` is still honored when set — useful for ad-hoc debugging — and
+//! is parsed as an `env_logger`-style spec with the configured baseline as
+//! the fallback default.
 
 use std::io::Write as _;
 use std::sync::OnceLock;
 
-use log::{LevelFilter, Log, Metadata, Record};
+use log::{Level, LevelFilter, Log, Metadata, Record};
+
+/// Crate-name prefixes whose log records should be emitted by default.
+/// Anything else only emits when `RUST_LOG` explicitly opts it in.
+const OUR_CRATES: &[&str] = &["bwx", "bwx_agent"];
 
 struct Logger {
     default: LevelFilter,
@@ -36,7 +49,19 @@ impl Log for Logger {
         }
         let stderr = std::io::stderr();
         let mut h = stderr.lock();
-        let _ = writeln!(h, "{}: {}", record.level(), record.args());
+        let _ = match record.level() {
+            Level::Error => writeln!(h, "error: {}", record.args()),
+            Level::Warn => writeln!(h, "warning: {}", record.args()),
+            // Info shouldn't normally fire (we don't ship info-level
+            // sources), but render it cleanly if some dependency does.
+            Level::Info => writeln!(h, "{}", record.args()),
+            Level::Debug => {
+                writeln!(h, "debug [{}] {}", record.target(), record.args())
+            }
+            Level::Trace => {
+                writeln!(h, "trace [{}] {}", record.target(), record.args())
+            }
+        };
     }
 
     fn flush(&self) {
@@ -76,11 +101,28 @@ fn parse_spec(
     (default, modules)
 }
 
-/// Initialize the global logger from `RUST_LOG`, using `default_level` if unset.
-pub fn init(default_level: &str) {
-    let fallback = parse_level(default_level).unwrap_or(LevelFilter::Info);
-    let spec = std::env::var("RUST_LOG").unwrap_or_default();
-    let (default, modules) = parse_spec(&spec, fallback);
+/// Initialize the global logger.
+///
+/// `enabled` is the configured baseline: `true` emits records at `debug`
+/// and above from our crates, `false` silences everything. `RUST_LOG`, if
+/// set, takes precedence and is parsed as an `env_logger`-style spec
+/// using the configured baseline as the default level.
+pub fn init(enabled: bool) {
+    let baseline = if enabled {
+        LevelFilter::Debug
+    } else {
+        LevelFilter::Off
+    };
+    let env = std::env::var("RUST_LOG").unwrap_or_default();
+    let (default, modules) = if env.trim().is_empty() {
+        let modules = OUR_CRATES
+            .iter()
+            .map(|c| ((*c).to_string(), baseline))
+            .collect();
+        (LevelFilter::Off, modules)
+    } else {
+        parse_spec(&env, baseline)
+    };
 
     let max = modules
         .iter()
@@ -93,6 +135,52 @@ pub fn init(default_level: &str) {
 
     let _ = log::set_logger(logger);
     log::set_max_level(max);
+}
+
+/// Format a `Duration` in a friendly form: `523ms`, `2.341s`, `1m 32s`, `5m`.
+#[must_use]
+pub fn format_duration(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    let millis = d.subsec_millis();
+    if secs >= 60 {
+        let m = secs / 60;
+        let s = secs % 60;
+        if s == 0 {
+            format!("{m}m")
+        } else {
+            format!("{m}m {s}s")
+        }
+    } else if secs > 0 {
+        if millis == 0 {
+            format!("{secs}s")
+        } else {
+            format!("{secs}.{millis:03}s")
+        }
+    } else {
+        format!("{millis}ms")
+    }
+}
+
+/// Time `$body` and emit a debug record with the elapsed duration.
+///
+/// When debug is disabled the body runs without any timing instrumentation —
+/// no `Instant`, no string formatting — so this is safe on hot paths.
+#[macro_export]
+macro_rules! debug_time {
+    ($label:expr, $body:expr $(,)?) => {{
+        if ::log::log_enabled!(::log::Level::Debug) {
+            let __bwx_start = ::std::time::Instant::now();
+            let __bwx_result = $body;
+            ::log::debug!(
+                "{} ({})",
+                $label,
+                $crate::logger::format_duration(__bwx_start.elapsed()),
+            );
+            __bwx_result
+        } else {
+            $body
+        }
+    }};
 }
 
 #[cfg(test)]
@@ -130,12 +218,22 @@ mod tests {
     #[test]
     fn level_for_module_prefix() {
         let logger = Logger {
-            default: LevelFilter::Warn,
+            default: LevelFilter::Off,
             modules: vec![("bwx".to_string(), LevelFilter::Debug)],
         };
         assert_eq!(logger.level_for("bwx"), LevelFilter::Debug);
         assert_eq!(logger.level_for("bwx::config"), LevelFilter::Debug);
-        assert_eq!(logger.level_for("other"), LevelFilter::Warn);
-        assert_eq!(logger.level_for("bwxx"), LevelFilter::Warn);
+        assert_eq!(logger.level_for("other"), LevelFilter::Off);
+        assert_eq!(logger.level_for("bwxx"), LevelFilter::Off);
+    }
+
+    #[test]
+    fn duration_formatting() {
+        use std::time::Duration;
+        assert_eq!(format_duration(Duration::from_millis(523)), "523ms");
+        assert_eq!(format_duration(Duration::from_millis(2341)), "2.341s");
+        assert_eq!(format_duration(Duration::from_secs(5)), "5s");
+        assert_eq!(format_duration(Duration::from_secs(92)), "1m 32s");
+        assert_eq!(format_duration(Duration::from_secs(300)), "5m");
     }
 }

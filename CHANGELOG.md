@@ -2,6 +2,16 @@
 
 ## [2.2.2] - Unreleased
 
+* **Configurable diagnostic logging.** New `logging` config key
+  (`bwx config set logging on|off`, default `on`) toggles a single
+  bucket of diagnostic output written to stderr — error/warning
+  messages plus debug records used to trace internal operations and
+  time long-running steps. When `off`, `bwx` and `bwx-agent` emit
+  nothing on stderr. Output is restricted to our crates so
+  third-party libraries don't leak through; `RUST_LOG`, when set,
+  overrides the configured level for ad-hoc debugging. The new
+  `bwx::debug_time!` macro is zero-cost when logging is off (no
+  `Instant`, no string formatting).
 * **macOS-only commands no longer appear in `--help` on other
   platforms.** `bwx touchid {enroll,disable,status}`, `bwx setup-macos`,
   and `bwx teardown-macos` are now `#[cfg(target_os = "macos")]`-gated

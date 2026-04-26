@@ -448,6 +448,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "pinentry",
     "ssh_confirm_sign",
     "macos_unlock_dialog",
+    "logging",
     "touchid_gate",
 ];
 

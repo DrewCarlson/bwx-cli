@@ -67,7 +67,9 @@ async fn tokio_main(
             res?;
         }
         () = shutdown_signal() => {
-            log::info!("bwx-agent: shutdown signal received; clearing state");
+            log::debug!(
+                "bwx-agent: shutdown signal received; clearing state"
+            );
             shutdown_state.lock().await.clear();
         }
     }
@@ -100,7 +102,9 @@ async fn shutdown_signal() {
 }
 
 fn real_main() -> bin_error::Result<()> {
-    bwx::logger::init("info");
+    let logging = bwx::config::Config::load()
+        .map_or_else(|_| bwx::config::default_logging(), |c| c.logging);
+    bwx::logger::init(logging);
 
     let no_daemonize = std::env::args()
         .nth(1)

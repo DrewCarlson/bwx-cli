@@ -14,7 +14,9 @@ mod sock;
 fn main() {
     let opt = Opt::parse();
 
-    bwx::logger::init("info");
+    let logging = bwx::config::Config::load()
+        .map_or_else(|_| bwx::config::default_logging(), |c| c.logging);
+    bwx::logger::init(logging);
 
     let subcommand_name = opt.subcommand_name();
     actions::set_purpose(opt.purpose());

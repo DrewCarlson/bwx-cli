@@ -16,9 +16,9 @@ pub fn login() -> bin_error::Result<()> {
 }
 
 pub fn unlock() -> bin_error::Result<()> {
-    ensure_agent()?;
-    crate::actions::login()?;
-    crate::actions::unlock()?;
+    bwx::debug_time!("ensure_agent", ensure_agent())?;
+    bwx::debug_time!("actions::login", crate::actions::login())?;
+    bwx::debug_time!("actions::unlock", crate::actions::unlock())?;
 
     Ok(())
 }

@@ -42,9 +42,9 @@ pub fn get(
     ignore_case: bool,
     list_fields: bool,
 ) -> bin_error::Result<()> {
-    unlock()?;
+    bwx::debug_time!("ensure unlocked", unlock())?;
 
-    let db = load_db()?;
+    let db = bwx::debug_time!("load decrypted db", load_db())?;
 
     let desc = format!(
         "{}{}",
@@ -52,9 +52,11 @@ pub fn get(
         needle
     );
 
-    let (_, decrypted) =
+    let (_, decrypted) = bwx::debug_time!(
+        "find entry",
         find_entry(&db, needle, user, folder, ignore_case)
-            .with_context(|| format!("couldn't find entry for '{desc}'"))?;
+    )
+    .with_context(|| format!("couldn't find entry for '{desc}'"))?;
     if list_fields {
         decrypted.display_fields_list();
     } else if raw {
