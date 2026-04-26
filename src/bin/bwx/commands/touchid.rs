@@ -1,13 +1,6 @@
-#[cfg(target_os = "macos")]
 use super::auth::unlock;
 use crate::bin_error;
 
-#[cfg(not(target_os = "macos"))]
-pub fn touchid_enroll() -> bin_error::Result<()> {
-    Err(bin_error::Error::msg("touchid is only supported on macOS"))
-}
-
-#[cfg(target_os = "macos")]
 pub fn touchid_enroll() -> bin_error::Result<()> {
     unlock()?;
     crate::actions::touchid_enroll()?;

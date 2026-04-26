@@ -2,6 +2,13 @@
 
 ## [2.2.2] - Unreleased
 
+* **macOS-only commands no longer appear in `--help` on other
+  platforms.** `bwx touchid {enroll,disable,status}`, `bwx setup-macos`,
+  and `bwx teardown-macos` are now `#[cfg(target_os = "macos")]`-gated
+  in the clap `Opt` enum, so Linux/BSD builds simply don't list them
+  rather than listing them with a stub that errors at runtime. The
+  "(macOS only)" suffix has been dropped from the surviving help
+  text since it's now redundant.
 * **Touch ID wrapper key now lives in the data-protection keychain.**
   All `SecItem*` calls in `src/touchid/keychain.rs` pass
   `kSecUseDataProtectionKeychain = true`. Items are scoped by the

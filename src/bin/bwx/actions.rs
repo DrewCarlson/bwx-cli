@@ -192,10 +192,12 @@ pub fn touchid_enroll() -> bin_error::Result<()> {
     simple_action(bwx::protocol::Action::TouchIdEnroll)
 }
 
+#[cfg(target_os = "macos")]
 pub fn touchid_disable() -> bin_error::Result<()> {
     simple_action(bwx::protocol::Action::TouchIdDisable)
 }
 
+#[cfg(target_os = "macos")]
 pub fn touchid_status() -> bin_error::Result<(bool, String, Option<String>)> {
     let res = crate::sock::request(&build_request(
         bwx::protocol::Action::TouchIdStatus,

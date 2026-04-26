@@ -292,19 +292,18 @@ pub enum Opt {
     )]
     SshSocket,
 
-    #[command(
-        name = "touchid",
-        about = "Manage macOS Touch ID enrollment (macOS only)"
-    )]
+    #[cfg(target_os = "macos")]
+    #[command(name = "touchid", about = "Manage macOS Touch ID enrollment")]
     TouchId {
         #[command(subcommand)]
         cmd: TouchIdCmd,
     },
 
+    #[cfg(target_os = "macos")]
     #[command(
         name = "setup-macos",
         about = "Install the bwx-agent LaunchAgent + set SSH_AUTH_SOCK \
-            for GUI apps (macOS only)",
+            for GUI apps",
         long_about = "One-shot macOS environment setup. Writes a \
             LaunchAgent plist that exports `SSH_AUTH_SOCK` to the \
             current login session at every login, so Finder/Spotlight-\
@@ -318,9 +317,10 @@ pub enum Opt {
         force: bool,
     },
 
+    #[cfg(target_os = "macos")]
     #[command(
         name = "teardown-macos",
-        about = "Uninstall what `bwx setup-macos` created (macOS only)"
+        about = "Uninstall what `bwx setup-macos` created"
     )]
     TeardownMacos,
 
@@ -382,10 +382,13 @@ impl Opt {
             Self::SshPublicKey { .. } => "ssh-public-key".to_string(),
             Self::SshAllowedSigners => "ssh-allowed-signers".to_string(),
             Self::SshSocket => "ssh-socket".to_string(),
+            #[cfg(target_os = "macos")]
             Self::TouchId { cmd } => {
                 format!("touchid {}", cmd.subcommand_name())
             }
+            #[cfg(target_os = "macos")]
             Self::SetupMacos { .. } => "setup-macos".to_string(),
+            #[cfg(target_os = "macos")]
             Self::TeardownMacos => "teardown-macos".to_string(),
             Self::GenCompletions { .. } => "gen-completions".to_string(),
         }
@@ -401,6 +404,7 @@ pub enum CompletionShell {
     Elvish,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, clap::Parser)]
 pub enum TouchIdCmd {
     #[command(
@@ -416,6 +420,7 @@ pub enum TouchIdCmd {
     Status,
 }
 
+#[cfg(target_os = "macos")]
 impl TouchIdCmd {
     fn subcommand_name(&self) -> &'static str {
         match self {

@@ -1,7 +1,9 @@
 use clap::{CommandFactory as _, Parser as _};
 
 use crate::bin_error::ContextExt as _;
-use crate::cli::{CompletionShell, Config, Opt, TouchIdCmd};
+#[cfg(target_os = "macos")]
+use crate::cli::TouchIdCmd;
+use crate::cli::{CompletionShell, Config, Opt};
 
 mod actions;
 mod bin_error;
@@ -158,12 +160,15 @@ fn main() {
             commands::ssh_socket();
             Ok(())
         }
+        #[cfg(target_os = "macos")]
         Opt::TouchId { cmd } => match cmd {
             TouchIdCmd::Enroll => commands::touchid_enroll(),
             TouchIdCmd::Disable => commands::touchid_disable(),
             TouchIdCmd::Status => commands::touchid_status(),
         },
+        #[cfg(target_os = "macos")]
         Opt::SetupMacos { force } => commands::setup_macos(force),
+        #[cfg(target_os = "macos")]
         Opt::TeardownMacos => commands::teardown_macos(),
         Opt::GenCompletions { shell } => {
             match shell {

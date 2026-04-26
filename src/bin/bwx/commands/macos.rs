@@ -1,35 +1,16 @@
 use crate::bin_error;
 
-#[cfg(not(target_os = "macos"))]
-pub fn setup_macos(_force: bool) -> bin_error::Result<()> {
-    Err(bin_error::Error::msg(
-        "setup-macos is only supported on macOS",
-    ))
-}
-
-#[cfg(target_os = "macos")]
 pub fn setup_macos(force: bool) -> bin_error::Result<()> {
     do_setup_macos(force)
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn teardown_macos() -> bin_error::Result<()> {
-    Err(bin_error::Error::msg(
-        "teardown-macos is only supported on macOS",
-    ))
-}
-
-#[cfg(target_os = "macos")]
 pub fn teardown_macos() -> bin_error::Result<()> {
     do_teardown_macos()
 }
 
-#[cfg(target_os = "macos")]
 const LAUNCHAGENT_LABEL: &str = "drews.website.bwx.ssh-auth-sock";
-#[cfg(target_os = "macos")]
 const AGENT_LAUNCHAGENT_LABEL: &str = "drews.website.bwx.agent";
 
-#[cfg(target_os = "macos")]
 fn do_setup_macos(force: bool) -> bin_error::Result<()> {
     let home = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
@@ -200,7 +181,6 @@ fn do_setup_macos(force: bool) -> bin_error::Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 fn do_teardown_macos() -> bin_error::Result<()> {
     let home = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
