@@ -1,6 +1,6 @@
 use std::{io::Read as _, os::unix::ffi::OsStringExt as _};
 
-use crate::bin_error::{self, ContextExt as _};
+use crate::bin_error;
 
 /// Per-CLI-process session identifier. Attached to every outbound
 /// request so the agent can collapse a single `bwx <command>` invocation
@@ -78,6 +78,10 @@ pub fn lock() -> bin_error::Result<()> {
 }
 
 pub fn quit() -> bin_error::Result<()> {
+    // Drop any cached connection up-front: the agent we're about to ask
+    // to exit is the one any cached socket points at, and we don't want
+    // a later request() to chase a dead fd.
+    crate::sock::Sock::invalidate_cached();
     match crate::sock::Sock::connect() {
         Ok(mut sock) => {
             let pidfile = bwx::dirs::pid_file();
@@ -109,14 +113,13 @@ pub fn decrypt(
     entry_key: Option<&str>,
     org_id: Option<&str>,
 ) -> bin_error::Result<String> {
-    let mut sock = connect()?;
-    sock.send(&build_request(bwx::protocol::Action::Decrypt {
-        cipherstring: cipherstring.to_string(),
-        entry_key: entry_key.map(std::string::ToString::to_string),
-        org_id: org_id.map(std::string::ToString::to_string),
-    }))?;
-
-    let res = sock.recv()?;
+    let res = crate::sock::request(&build_request(
+        bwx::protocol::Action::Decrypt {
+            cipherstring: cipherstring.to_string(),
+            entry_key: entry_key.map(std::string::ToString::to_string),
+            org_id: org_id.map(std::string::ToString::to_string),
+        },
+    ))?;
     match res {
         bwx::protocol::Response::Decrypt { plaintext } => Ok(plaintext),
         bwx::protocol::Response::Error { error } => {
@@ -131,10 +134,9 @@ pub fn decrypt(
 pub fn decrypt_batch(
     items: Vec<bwx::protocol::DecryptItem>,
 ) -> bin_error::Result<Vec<bin_error::Result<String>>> {
-    let mut sock = connect()?;
-    sock.send(&build_request(bwx::protocol::Action::DecryptBatch { items }))?;
-
-    let res = sock.recv()?;
+    let res = crate::sock::request(&build_request(
+        bwx::protocol::Action::DecryptBatch { items },
+    ))?;
     match res {
         bwx::protocol::Response::DecryptBatch { results } => Ok(results
             .into_iter()
@@ -162,13 +164,12 @@ pub fn encrypt(
     plaintext: &str,
     org_id: Option<&str>,
 ) -> bin_error::Result<String> {
-    let mut sock = connect()?;
-    sock.send(&build_request(bwx::protocol::Action::Encrypt {
-        plaintext: plaintext.to_string(),
-        org_id: org_id.map(std::string::ToString::to_string),
-    }))?;
-
-    let res = sock.recv()?;
+    let res = crate::sock::request(&build_request(
+        bwx::protocol::Action::Encrypt {
+            plaintext: plaintext.to_string(),
+            org_id: org_id.map(std::string::ToString::to_string),
+        },
+    ))?;
     match res {
         bwx::protocol::Response::Encrypt { cipherstring } => Ok(cipherstring),
         bwx::protocol::Response::Error { error } => {
@@ -196,9 +197,9 @@ pub fn touchid_disable() -> bin_error::Result<()> {
 }
 
 pub fn touchid_status() -> bin_error::Result<(bool, String, Option<String>)> {
-    let mut sock = connect()?;
-    sock.send(&build_request(bwx::protocol::Action::TouchIdStatus))?;
-    let res = sock.recv()?;
+    let res = crate::sock::request(&build_request(
+        bwx::protocol::Action::TouchIdStatus,
+    ))?;
     match res {
         bwx::protocol::Response::TouchIdStatus {
             enrolled,
@@ -215,10 +216,8 @@ pub fn touchid_status() -> bin_error::Result<(bool, String, Option<String>)> {
 }
 
 pub fn version() -> bin_error::Result<u32> {
-    let mut sock = connect()?;
-    sock.send(&build_request(bwx::protocol::Action::Version))?;
-
-    let res = sock.recv()?;
+    let res =
+        crate::sock::request(&build_request(bwx::protocol::Action::Version))?;
     match res {
         bwx::protocol::Response::Version { version } => Ok(version),
         bwx::protocol::Response::Error { error } => Err(
@@ -231,11 +230,7 @@ pub fn version() -> bin_error::Result<u32> {
 }
 
 fn simple_action(action: bwx::protocol::Action) -> bin_error::Result<()> {
-    let mut sock = connect()?;
-
-    sock.send(&build_request(action))?;
-
-    let res = sock.recv()?;
+    let res = crate::sock::request(&build_request(action))?;
     match res {
         bwx::protocol::Response::Ack => Ok(()),
         bwx::protocol::Response::Error { error } => {
@@ -245,18 +240,6 @@ fn simple_action(action: bwx::protocol::Action) -> bin_error::Result<()> {
             "unexpected message: {res:?}"
         ))),
     }
-}
-
-fn connect() -> bin_error::Result<crate::sock::Sock> {
-    crate::sock::Sock::connect().with_context(|| {
-        let log = bwx::dirs::agent_stderr_file();
-        format!(
-            "failed to connect to bwx-agent \
-            (this often means that the agent failed to start; \
-            check {} for agent logs)",
-            log.display()
-        )
-    })
 }
 
 fn wait_for_exit(pid: rustix::process::Pid) {

@@ -24,6 +24,9 @@
   IPC instead of one round-trip per field. Adds `Action::DecryptBatch`
   and `Response::DecryptBatch` to the agent protocol; per-item failures
   are reported back to the caller without aborting the batch.
+* Reuse a single `UnixStream` for every IPC inside a `bwx` invocation
+  instead of opening a fresh connection per action. Cached socket is
+  cleared on send/recv failure (transparent reconnect) and on `Quit`.
 
 ## [2.1.0] - 2026-04-26
 
