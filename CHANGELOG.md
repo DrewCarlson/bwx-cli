@@ -2,6 +2,15 @@
 
 ## [2.2.1] - Unreleased
 
+* **Fix macOS releases getting killed at exec time.** 2.2.0 binaries
+  were signed with a `keychain-access-groups` entitlement that AMFI
+  treats as restricted; without a provisioning profile (which a bare
+  CLI Mach-O can't carry) the kernel rejects the signature and SIGKILLs
+  the process before `main` runs. Drop the entitlement; Touch ID
+  enforcement stays put — the agent's presence check still fires
+  before the wrapper key is released, the only loss is the
+  Keychain-side biometric ACL which was never actually being applied
+  on shipped builds anyway.
 * `bwx config show/set/unset` now offer the valid configuration keys
   via shell completions and reject unknown keys at the CLI parse step.
   `bwx config unset sync_interval` resets it to the default instead of

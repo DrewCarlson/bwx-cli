@@ -7,12 +7,14 @@
 #   3. "Apple Development: …"                (free, Xcode auto-provisioned)
 #   4. ad-hoc (`-`)                          (no cert; cargo-install users)
 #
-# Tier 2 also signs an entitlements plist declaring a
-# `keychain-access-groups` entry scoped to the signing identity's team
-# ID. That unlocks the biometric-ACL Keychain path at runtime. Tiers 3
-# and 4 fall through to the plain-Keychain path; Touch ID enforcement
-# lives in the agent's `require_presence` call rather than in the item
-# ACL.
+# Tier 2 signs with hardened runtime + the
+# `com.apple.security.cs.allow-unsigned-executable-memory` entitlement
+# (Rust's allocator needs it; notarization auto-grants it). Touch ID
+# enforcement lives in the agent's `require_presence` call rather than
+# in a Keychain item ACL — bare CLI binaries cannot carry the
+# `keychain-access-groups` restricted entitlement (it requires a
+# provisioning profile, which a Mach-O CLI can't embed), and AMFI
+# kills any Developer-ID build that asks for it.
 #
 # Usage:
 #   ./scripts/sign-macos.sh                  # sign ~/.cargo/bin/bwx{,-agent}
@@ -28,12 +30,9 @@ pick_identity() {
     return
   fi
   ids="$(security find-identity -v -p codesigning 2>/dev/null || true)"
-  # Developer ID Application is the only CLI-tool-friendly identity
-  # that can carry a `keychain-access-groups` entitlement without a
-  # provisioning profile. Apple Development certs *can* sign, but the
-  # entitlement would only work inside a `.app` bundle with an
-  # embedded profile, so they get signed plain (no entitlement) —
-  # identical in effect to ad-hoc for bwx's purposes.
+  # Developer ID Application is the only identity that pairs with
+  # hardened runtime + notarization. Apple Development certs sign but
+  # don't notarize, so they fall through to the plain path.
   pick="$(printf "%s" "$ids" | grep 'Developer ID Application' | head -1 \
            | sed -nE 's/.*"(.+)".*/\1/p')"
   if [ -n "$pick" ]; then printf "%s" "$pick"; return; fi
@@ -41,11 +40,6 @@ pick_identity() {
            | sed -nE 's/.*"(.+)".*/\1/p')"
   if [ -n "$pick" ]; then printf "%s" "$pick"; return; fi
   printf "%s" "-"
-}
-
-extract_team_id() {
-  # "Apple Development: Name (ABCD123456)" -> ABCD123456
-  printf "%s" "$1" | sed -nE 's/.*\(([A-Z0-9]{10})\).*/\1/p'
 }
 
 IDENTITY_STR="$(pick_identity)"
@@ -56,13 +50,9 @@ esac
 
 if [ "$USE_ENTITLEMENTS" -eq 0 ]; then
   if [ "$IDENTITY_STR" = "-" ]; then
-    echo "signing mode: ad-hoc (plain Keychain path)"
+    echo "signing mode: ad-hoc"
   else
-    echo "signing mode: $IDENTITY_STR (plain Keychain path)"
-    echo "  (Developer ID Application is required for biometric-ACL"
-    echo "   Keychain items on command-line tools; Apple Development"
-    echo "   works for code-signing but not for"
-    echo "   keychain-access-groups without a provisioning profile.)"
+    echo "signing mode: $IDENTITY_STR (plain, no hardened runtime)"
   fi
   for name in bwx bwx-agent; do
     bin="$BIN_DIR/$name"
@@ -73,17 +63,11 @@ if [ "$USE_ENTITLEMENTS" -eq 0 ]; then
   exit 0
 fi
 
-TEAM_ID="$(extract_team_id "$IDENTITY_STR")"
-if [ -z "$TEAM_ID" ]; then
-  echo "error: couldn't extract team id from identity: $IDENTITY_STR" >&2
-  exit 1
-fi
-
-echo "signing mode: $IDENTITY_STR (biometric-ACL Keychain path)"
+echo "signing mode: $IDENTITY_STR"
 
 # `HARDENED_RUNTIME=1` opts the binary into Apple's hardened runtime
 # (`codesign --options runtime`), required for notarization. The
-# `allow-unsigned-executable-memory` entitlement is also added so AMFI
+# `allow-unsigned-executable-memory` entitlement is added so AMFI
 # doesn't kill the Rust binary on first run — Rust's allocator + a few
 # crates touch executable pages in ways the strict default rejects.
 # Local dev (no env var) skips both.
@@ -96,46 +80,30 @@ if [ "${HARDENED_RUNTIME:-0}" = "1" ]; then
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>keychain-access-groups</key>
-  <array>
-    <string>${TEAM_ID}.bwx</string>
-  </array>
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
   <true/>
 </dict>
 </plist>
 EOF
   HR_FLAG="--options=runtime"
+  ENT_FLAG="--entitlements $ENTITLEMENTS"
 else
-  cat > "$ENTITLEMENTS" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>keychain-access-groups</key>
-  <array>
-    <string>${TEAM_ID}.bwx</string>
-  </array>
-</dict>
-</plist>
-EOF
   HR_FLAG=""
+  ENT_FLAG=""
 fi
 
 for name in bwx bwx-agent; do
   bin="$BIN_DIR/$name"
   [ -x "$bin" ] || continue
   # shellcheck disable=SC2086
-  codesign --force $HR_FLAG --timestamp \
-           --entitlements "$ENTITLEMENTS" \
+  codesign --force $HR_FLAG --timestamp $ENT_FLAG \
            --sign "$IDENTITY_STR" "$bin"
   echo "  signed: $bin"
 done
 
 echo ""
-echo "access group: ${TEAM_ID}.bwx"
 if [ "${HARDENED_RUNTIME:-0}" = "1" ]; then
   echo "hardened runtime: on (notarization-ready)"
 fi
-echo "bwx touchid enroll will use a biometric-ACL Keychain item."
+echo "Touch ID is enforced via a presence check before the agent"
+echo "releases the wrapper key; no Keychain ACL is attached."
