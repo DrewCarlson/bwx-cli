@@ -5,6 +5,9 @@
 * Cache `Config::load()` once per `bwx` invocation; trims a few ms of
   redundant disk + JSON parse from every command that touches the
   vault.
+* Reuse the search-cipher plaintext when finalising the matched entry
+  in `find_entry`, so `get`/`code`/`exec` skip the redundant
+  decrypt-via-IPC of name, folder, notes, and login username.
 
 ## [2.1.0] - 2026-04-26
 

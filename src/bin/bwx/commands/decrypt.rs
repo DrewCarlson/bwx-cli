@@ -199,6 +199,116 @@ pub(super) fn decrypt_search_cipher(
     })
 }
 
+/// Build a `DecryptedCipher` for an entry that we already searched, reusing
+/// the plaintext fields that `decrypt_search_cipher` already produced
+/// (name, folder, notes, login username/URIs). Saves the redundant IPC
+/// round-trips for those fields on every `bwx get`/`code`/etc. lookup.
+pub(super) fn decrypt_cipher_using_search(
+    entry: &bwx::db::Entry,
+    search: &DecryptedSearchCipher,
+) -> bin_error::Result<DecryptedCipher> {
+    let fields = entry
+        .fields
+        .iter()
+        .map(|field| {
+            Ok(DecryptedField {
+                name: field
+                    .name
+                    .as_ref()
+                    .map(|name| {
+                        crate::actions::decrypt(
+                            name,
+                            entry.key.as_deref(),
+                            entry.org_id.as_deref(),
+                        )
+                    })
+                    .transpose()?,
+                value: field
+                    .value
+                    .as_ref()
+                    .map(|value| {
+                        crate::actions::decrypt(
+                            value,
+                            entry.key.as_deref(),
+                            entry.org_id.as_deref(),
+                        )
+                    })
+                    .transpose()?,
+                ty: field.ty,
+            })
+        })
+        .collect::<bin_error::Result<_>>()?;
+    let history = entry
+        .history
+        .iter()
+        .map(|history_entry| {
+            Ok(DecryptedHistoryEntry {
+                last_used_date: history_entry.last_used_date.clone(),
+                password: crate::actions::decrypt(
+                    &history_entry.password,
+                    entry.key.as_deref(),
+                    entry.org_id.as_deref(),
+                )?,
+            })
+        })
+        .collect::<bin_error::Result<_>>()?;
+
+    let data = match &entry.data {
+        bwx::db::EntryData::Login {
+            password,
+            totp,
+            uris,
+            ..
+        } => DecryptedData::Login {
+            username: search.user.clone(),
+            password: decrypt_field(
+                Field::Password,
+                password.as_deref(),
+                entry.key.as_deref(),
+                entry.org_id.as_deref(),
+            ),
+            totp: decrypt_field(
+                Field::Totp,
+                totp.as_deref(),
+                entry.key.as_deref(),
+                entry.org_id.as_deref(),
+            ),
+            // URIs aren't reused from the search cipher: the search path
+            // drops decrypt failures, but the full cipher signals failure
+            // by returning `None` for the whole list. Decrypt fresh to
+            // preserve that distinction.
+            uris: uris
+                .iter()
+                .map(|s| {
+                    decrypt_field(
+                        Field::Uris,
+                        Some(&s.uri),
+                        entry.key.as_deref(),
+                        entry.org_id.as_deref(),
+                    )
+                    .map(|uri| DecryptedUri {
+                        uri,
+                        match_type: s.match_type,
+                    })
+                })
+                .collect(),
+        },
+        // Other entry types don't expose enough overlap with the search
+        // cipher to skip work; fall through to the standard path.
+        _ => return decrypt_cipher(entry),
+    };
+
+    Ok(DecryptedCipher {
+        id: entry.id.clone(),
+        folder: search.folder.clone(),
+        name: search.name.clone(),
+        data,
+        fields,
+        notes: search.notes.clone(),
+        history,
+    })
+}
+
 pub(super) fn decrypt_cipher(
     entry: &bwx::db::Entry,
 ) -> bin_error::Result<DecryptedCipher> {

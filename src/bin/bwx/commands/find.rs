@@ -1,5 +1,7 @@
 use super::cipher::{DecryptedCipher, DecryptedSearchCipher};
-use super::decrypt::{decrypt_cipher, decrypt_search_cipher};
+use super::decrypt::{
+    decrypt_cipher, decrypt_cipher_using_search, decrypt_search_cipher,
+};
 use crate::bin_error;
 
 #[derive(Debug, Clone)]
@@ -128,9 +130,9 @@ pub(super) fn find_entry(
                 .map(|decrypted| (entry.clone(), decrypted))
         })
         .collect::<bin_error::Result<_>>()?;
-    let (entry, _) =
+    let (entry, search) =
         find_entry_raw(&ciphers, &needle, username, folder, ignore_case)?;
-    let decrypted_entry = decrypt_cipher(&entry)?;
+    let decrypted_entry = decrypt_cipher_using_search(&entry, &search)?;
     Ok((entry, decrypted_entry))
 }
 
