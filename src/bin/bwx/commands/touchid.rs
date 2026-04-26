@@ -24,7 +24,7 @@ pub fn touchid_disable() -> bin_error::Result<()> {
     println!("Touch ID enrollment removed.");
     // `touchid_gate` and enrollment are orthogonal; disabling enrollment
     // doesn't stop per-operation prompts.
-    let gate = bwx::config::Config::load()
+    let gate = bwx::config::Config::load_cached()
         .map(|c| c.touchid_gate)
         .unwrap_or_default();
     if !matches!(gate, bwx::touchid::Gate::Off) {

@@ -45,7 +45,7 @@ pub fn ssh_socket() {
 pub fn ssh_allowed_signers() -> bin_error::Result<()> {
     unlock()?;
     let db = load_db()?;
-    let config = bwx::config::Config::load()?;
+    let config = bwx::config::Config::load_cached()?;
     let email = config.email.as_deref().ok_or_else(|| {
         bin_error::Error::msg(
             "no email configured; run `bwx config set email`",

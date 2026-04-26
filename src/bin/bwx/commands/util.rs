@@ -105,7 +105,7 @@ pub(super) fn parse_editor(
 }
 
 pub(super) fn load_db() -> bin_error::Result<bwx::db::Db> {
-    let config = bwx::config::Config::load()?;
+    let config = bwx::config::Config::load_cached()?;
     config.email.as_ref().map_or_else(
         || {
             Err(crate::bin_error::err!(
@@ -120,7 +120,7 @@ pub(super) fn load_db() -> bin_error::Result<bwx::db::Db> {
 }
 
 pub(super) fn save_db(db: &bwx::db::Db) -> bin_error::Result<()> {
-    let config = bwx::config::Config::load()?;
+    let config = bwx::config::Config::load_cached()?;
     config.email.as_ref().map_or_else(
         || {
             Err(crate::bin_error::err!(
@@ -135,7 +135,7 @@ pub(super) fn save_db(db: &bwx::db::Db) -> bin_error::Result<()> {
 }
 
 pub(super) fn remove_db() -> bin_error::Result<()> {
-    let config = bwx::config::Config::load()?;
+    let config = bwx::config::Config::load_cached()?;
     config.email.as_ref().map_or_else(
         || {
             Err(crate::bin_error::err!(

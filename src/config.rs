@@ -1,8 +1,11 @@
 use crate::prelude::*;
 
 use std::io::{Read as _, Write as _};
+use std::sync::{Arc, OnceLock};
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+static CACHED: OnceLock<Arc<Config>> = OnceLock::new();
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct Config {
@@ -195,8 +198,20 @@ impl Config {
         Ok(())
     }
 
+    /// Load once per process and reuse on subsequent calls. Safe for the
+    /// short-lived `bwx` CLI where the config file isn't mutated mid-run.
+    /// Mutating commands (`bwx config set`/`unset`) must keep using
+    /// `load()` so they see fresh state.
+    pub fn load_cached() -> Result<Arc<Self>> {
+        if let Some(c) = CACHED.get() {
+            return Ok(Arc::clone(c));
+        }
+        let loaded = Arc::new(Self::load()?);
+        Ok(Arc::clone(CACHED.get_or_init(|| loaded)))
+    }
+
     pub fn validate() -> Result<()> {
-        let config = Self::load()?;
+        let config = Self::load_cached()?;
         if config.email.is_none() {
             return Err(Error::ConfigMissingEmail);
         }
