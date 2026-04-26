@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.1] - Unreleased
+
+* `bwx config show/set/unset` now offer the valid configuration keys
+  via shell completions and reject unknown keys at the CLI parse step.
+  `bwx config unset sync_interval` resets it to the default instead of
+  erroring.
+
 ## [2.2.0] - 2026-04-26
 
 * Cache `Config::load()` once per `bwx` invocation; trims a few ms of

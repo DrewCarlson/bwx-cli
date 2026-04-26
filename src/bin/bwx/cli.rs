@@ -426,6 +426,26 @@ impl TouchIdCmd {
     }
 }
 
+/// Every config key recognised by `bwx config show/set/unset`. Kept in
+/// sync with the match arms in `commands/config.rs`; surfaced here so
+/// shell completions (`bwx gen-completions <shell>`) can offer the
+/// valid keys without the user having to remember them.
+pub const CONFIG_KEYS: &[&str] = &[
+    "email",
+    "sso_id",
+    "base_url",
+    "identity_url",
+    "ui_url",
+    "notifications_url",
+    "client_cert_path",
+    "lock_timeout",
+    "sync_interval",
+    "pinentry",
+    "ssh_confirm_sign",
+    "macos_unlock_dialog",
+    "touchid_gate",
+];
+
 #[derive(Debug, clap::Parser)]
 pub enum Config {
     #[command(
@@ -435,19 +455,28 @@ pub enum Config {
             key's current value in plain text."
     )]
     Show {
-        #[arg(help = "Configuration key to read (omit to dump all)")]
+        #[arg(
+            help = "Configuration key to read (omit to dump all)",
+            value_parser = clap::builder::PossibleValuesParser::new(CONFIG_KEYS),
+        )]
         key: Option<String>,
     },
     #[command(about = "Set a configuration option")]
     Set {
-        #[arg(help = "Configuration key to set")]
+        #[arg(
+            help = "Configuration key to set",
+            value_parser = clap::builder::PossibleValuesParser::new(CONFIG_KEYS),
+        )]
         key: String,
         #[arg(help = "Value to set the configuration option to")]
         value: String,
     },
     #[command(about = "Reset a configuration option to its default")]
     Unset {
-        #[arg(help = "Configuration key to unset")]
+        #[arg(
+            help = "Configuration key to unset",
+            value_parser = clap::builder::PossibleValuesParser::new(CONFIG_KEYS),
+        )]
         key: String,
     },
 }
@@ -460,5 +489,32 @@ impl Config {
             Self::Unset { .. } => "unset",
         }
         .to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser as _;
+
+    #[test]
+    fn config_set_accepts_each_known_key() {
+        for key in CONFIG_KEYS {
+            let res =
+                Opt::try_parse_from(["bwx", "config", "set", key, "value"]);
+            assert!(res.is_ok(), "key {key} was rejected: {res:?}");
+        }
+    }
+
+    #[test]
+    fn config_set_rejects_unknown_key() {
+        let res = Opt::try_parse_from(["bwx", "config", "set", "bogus", "x"]);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn config_unset_rejects_unknown_key() {
+        let res = Opt::try_parse_from(["bwx", "config", "unset", "nope"]);
+        assert!(res.is_err());
     }
 }

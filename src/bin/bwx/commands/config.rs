@@ -120,6 +120,9 @@ pub fn config_unset(key: &str) -> bin_error::Result<()> {
         "lock_timeout" => {
             config.lock_timeout = bwx::config::default_lock_timeout();
         }
+        "sync_interval" => {
+            config.sync_interval = bwx::config::default_sync_interval();
+        }
         "pinentry" => config.pinentry = bwx::config::default_pinentry(),
         "ssh_confirm_sign" => config.ssh_confirm_sign = false,
         "macos_unlock_dialog" => {
