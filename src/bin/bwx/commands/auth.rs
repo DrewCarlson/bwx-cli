@@ -57,6 +57,7 @@ pub fn purge() -> bin_error::Result<()> {
 
 pub fn stop_agent() -> bin_error::Result<()> {
     crate::actions::quit()?;
+    super::util::invalidate_agent_version_cache();
 
     Ok(())
 }

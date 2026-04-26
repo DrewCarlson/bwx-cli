@@ -194,13 +194,16 @@ fn check_config() -> bin_error::Result<()> {
     })
 }
 
+// Cache for the per-invocation result of `check_agent_version`. Reset by
+// `invalidate_agent_version_cache()` whenever we deliberately stop the
+// agent so a later `ensure_agent` in the same process re-verifies a
+// fresh agent rather than trusting the prior probe.
+static AGENT_VERSION_VERIFIED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub(super) fn check_agent_version() -> bin_error::Result<()> {
-    // Within a single CLI invocation the agent process can't change
-    // versions on us, so cache the successful probe and skip the IPC
-    // round-trip on subsequent calls (e.g. the second `ensure_agent`
-    // triggered by `--clipboard`).
-    static VERIFIED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    if VERIFIED.get().is_some() {
+    use std::sync::atomic::Ordering;
+    if AGENT_VERSION_VERIFIED.load(Ordering::Acquire) {
         return Ok(());
     }
 
@@ -212,8 +215,13 @@ pub(super) fn check_agent_version() -> bin_error::Result<()> {
             "client protocol version is {client_version} but agent protocol version is {agent_version}"
         ));
     }
-    let _ = VERIFIED.set(());
+    AGENT_VERSION_VERIFIED.store(true, Ordering::Release);
     Ok(())
+}
+
+pub(super) fn invalidate_agent_version_cache() {
+    AGENT_VERSION_VERIFIED
+        .store(false, std::sync::atomic::Ordering::Release);
 }
 
 fn version_or_quit() -> bin_error::Result<u32> {

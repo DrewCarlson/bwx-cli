@@ -14,6 +14,8 @@
 * Cache the agent protocol-version probe within a single CLI
   invocation, so commands that re-enter `ensure_agent` (e.g.
   `--clipboard`) don't pay for a redundant IPC round-trip.
+  `stop_agent()` now invalidates that cache so a later
+  `ensure_agent` re-verifies a fresh agent.
 * Memoise compiled URI-match regexes during entry lookup. The find
   loop runs the same patterns against every cipher several times per
   search; compiling once per pattern keeps regex-heavy `bwx get`
