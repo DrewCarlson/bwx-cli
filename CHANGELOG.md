@@ -2,6 +2,16 @@
 
 ## [2.2.2] - Unreleased
 
+* **Faster full-detail decrypt for `bwx get --full`/`history`/`code`.**
+  The full-cipher decrypt path (`decrypt_cipher` /
+  `decrypt_cipher_using_search`) previously fired one IPC per
+  cipherstring — folder, notes, every history password, both halves
+  of every custom field, and every variant-specific field (login
+  password/totp/URIs, identity address fields, card numbers, SSH
+  key parts). An entry with several history rows and custom fields
+  could rack up 20+ synchronous round trips. Both functions now
+  stage every field into one `DecryptBatch` via a shared `Batcher`
+  helper and assemble results from the response.
 * **Faster `bwx get`/`code`/`edit`/`remove`/`history`/`search` on
   large vaults.** `find_entry` and `search` previously made one IPC
   round-trip per cipherstring per entry (name + username + folder +

@@ -5,22 +5,74 @@ use super::cipher::{
 use super::field::{Field, ListField};
 use crate::bin_error;
 
-pub(super) fn decrypt_field(
-    name: Field,
-    field: Option<&str>,
-    entry_key: Option<&str>,
-    org_id: Option<&str>,
-) -> Option<String> {
-    let field = field
-        .as_ref()
-        .map(|field| crate::actions::decrypt(field, entry_key, org_id))
-        .transpose();
-    match field {
-        Ok(field) => field,
-        Err(e) => {
-            log::warn!("failed to decrypt {name}: {e}");
-            None
+/// Stages cipherstrings into a single `DecryptBatch` IPC, then exposes
+/// per-index typed reads with the same fatal-vs-warn-and-skip semantics
+/// the per-field decrypt path used to have.
+struct Batcher {
+    items: Vec<bwx::protocol::DecryptItem>,
+    results: Vec<bin_error::Result<String>>,
+}
+
+impl Batcher {
+    fn new() -> Self {
+        Self {
+            items: Vec::new(),
+            results: Vec::new(),
         }
+    }
+
+    fn push(
+        &mut self,
+        cipherstring: &str,
+        entry_key: Option<&str>,
+        org_id: Option<&str>,
+    ) -> usize {
+        self.items.push(bwx::protocol::DecryptItem {
+            cipherstring: cipherstring.to_string(),
+            entry_key: entry_key.map(std::string::ToString::to_string),
+            org_id: org_id.map(std::string::ToString::to_string),
+        });
+        self.items.len() - 1
+    }
+
+    fn push_opt(
+        &mut self,
+        cipherstring: Option<&str>,
+        entry_key: Option<&str>,
+        org_id: Option<&str>,
+    ) -> Option<usize> {
+        cipherstring.map(|c| self.push(c, entry_key, org_id))
+    }
+
+    fn run(&mut self) -> bin_error::Result<()> {
+        if !self.items.is_empty() {
+            let items = std::mem::take(&mut self.items);
+            self.results = crate::actions::decrypt_batch(items)?;
+        }
+        Ok(())
+    }
+
+    /// Read a slot whose decrypt failure should propagate as an error.
+    fn take_required(&self, idx: usize) -> bin_error::Result<String> {
+        match &self.results[idx] {
+            Ok(p) => Ok(p.clone()),
+            Err(e) => Err(crate::bin_error::Error::msg(e.to_string())),
+        }
+    }
+
+    /// Read a slot whose decrypt failure should warn and yield `None`.
+    fn take_optional(
+        &self,
+        idx: Option<usize>,
+        label: impl std::fmt::Display,
+    ) -> Option<String> {
+        idx.and_then(|i| match &self.results[i] {
+            Ok(p) => Some(p.clone()),
+            Err(e) => {
+                log::warn!("failed to decrypt {label}: {e}");
+                None
+            }
+        })
     }
 }
 
@@ -437,101 +489,94 @@ pub(super) fn decrypt_search_ciphers(
 
 /// Build a `DecryptedCipher` for an entry that we already searched, reusing
 /// the plaintext fields that `decrypt_search_ciphers` already produced
-/// (name, folder, notes, login username/URIs). Saves the redundant IPC
-/// round-trips for those fields on every `bwx get`/`code`/etc. lookup.
+/// (name, folder, notes, login username/URIs). Stages the remaining
+/// per-field decrypts into one `DecryptBatch` IPC.
 pub(super) fn decrypt_cipher_using_search(
     entry: &bwx::db::Entry,
     search: &DecryptedSearchCipher,
 ) -> bin_error::Result<DecryptedCipher> {
-    let fields = entry
+    // Non-Login entries don't share enough plaintext with the search
+    // cipher to skip work; defer to the full path.
+    let bwx::db::EntryData::Login {
+        password,
+        totp,
+        uris,
+        ..
+    } = &entry.data
+    else {
+        return decrypt_cipher(entry);
+    };
+
+    let key = entry.key.as_deref();
+    let org = entry.org_id.as_deref();
+    let mut b = Batcher::new();
+
+    let field_slots: Vec<(
+        Option<usize>,
+        Option<usize>,
+        Option<bwx::api::FieldType>,
+    )> = entry
         .fields
         .iter()
-        .map(|field| {
-            Ok(DecryptedField {
-                name: field
-                    .name
-                    .as_ref()
-                    .map(|name| {
-                        crate::actions::decrypt(
-                            name,
-                            entry.key.as_deref(),
-                            entry.org_id.as_deref(),
-                        )
-                    })
-                    .transpose()?,
-                value: field
-                    .value
-                    .as_ref()
-                    .map(|value| {
-                        crate::actions::decrypt(
-                            value,
-                            entry.key.as_deref(),
-                            entry.org_id.as_deref(),
-                        )
-                    })
-                    .transpose()?,
-                ty: field.ty,
-            })
+        .map(|f| {
+            (
+                b.push_opt(f.name.as_deref(), key, org),
+                b.push_opt(f.value.as_deref(), key, org),
+                f.ty,
+            )
         })
-        .collect::<bin_error::Result<_>>()?;
-    let history = entry
+        .collect();
+
+    let history_slots: Vec<(String, usize)> = entry
         .history
         .iter()
-        .map(|history_entry| {
-            Ok(DecryptedHistoryEntry {
-                last_used_date: history_entry.last_used_date.clone(),
-                password: crate::actions::decrypt(
-                    &history_entry.password,
-                    entry.key.as_deref(),
-                    entry.org_id.as_deref(),
-                )?,
+        .map(|h| (h.last_used_date.clone(), b.push(&h.password, key, org)))
+        .collect();
+
+    let password_idx = b.push_opt(password.as_deref(), key, org);
+    let totp_idx = b.push_opt(totp.as_deref(), key, org);
+    // URIs aren't reused from the search cipher: the search path drops
+    // decrypt failures, but the full cipher signals failure by yielding
+    // `None` for the whole list. Decrypt fresh to preserve that.
+    let uri_slots: Vec<(usize, Option<bwx::api::UriMatchType>)> = uris
+        .iter()
+        .map(|s| (b.push(&s.uri, key, org), s.match_type))
+        .collect();
+
+    b.run()?;
+
+    let fields = field_slots
+        .into_iter()
+        .map(|(n_idx, v_idx, ty)| {
+            Ok(DecryptedField {
+                name: n_idx.map(|i| b.take_required(i)).transpose()?,
+                value: v_idx.map(|i| b.take_required(i)).transpose()?,
+                ty,
             })
         })
         .collect::<bin_error::Result<_>>()?;
 
-    let data = match &entry.data {
-        bwx::db::EntryData::Login {
-            password,
-            totp,
-            uris,
-            ..
-        } => DecryptedData::Login {
-            username: search.user.clone(),
-            password: decrypt_field(
-                Field::Password,
-                password.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            totp: decrypt_field(
-                Field::Totp,
-                totp.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            // URIs aren't reused from the search cipher: the search path
-            // drops decrypt failures, but the full cipher signals failure
-            // by returning `None` for the whole list. Decrypt fresh to
-            // preserve that distinction.
-            uris: uris
-                .iter()
-                .map(|s| {
-                    decrypt_field(
-                        Field::Uris,
-                        Some(&s.uri),
-                        entry.key.as_deref(),
-                        entry.org_id.as_deref(),
-                    )
-                    .map(|uri| DecryptedUri {
-                        uri,
-                        match_type: s.match_type,
-                    })
-                })
-                .collect(),
-        },
-        // Other entry types don't expose enough overlap with the search
-        // cipher to skip work; fall through to the standard path.
-        _ => return decrypt_cipher(entry),
+    let history = history_slots
+        .into_iter()
+        .map(|(date, idx)| {
+            Ok(DecryptedHistoryEntry {
+                last_used_date: date,
+                password: b.take_required(idx)?,
+            })
+        })
+        .collect::<bin_error::Result<_>>()?;
+
+    let data = DecryptedData::Login {
+        username: search.user.clone(),
+        password: b.take_optional(password_idx, Field::Password),
+        totp: b.take_optional(totp_idx, Field::Totp),
+        uris: uri_slots
+            .into_iter()
+            .map(|(idx, match_type)| {
+                b.take_optional(Some(idx), Field::Uris)
+                    .map(|uri| DecryptedUri { uri, match_type })
+            })
+            .collect(),
     };
 
     Ok(DecryptedCipher {
@@ -545,126 +590,70 @@ pub(super) fn decrypt_cipher_using_search(
     })
 }
 
-pub(super) fn decrypt_cipher(
-    entry: &bwx::db::Entry,
-) -> bin_error::Result<DecryptedCipher> {
-    // folder name should always be decrypted with the local key because
-    // folders are local to a specific user's vault, not the organization
-    let folder = entry
-        .folder
-        .as_ref()
-        .map(|folder| crate::actions::decrypt(folder, None, None))
-        .transpose();
-    let folder = match folder {
-        Ok(folder) => folder,
-        Err(e) => {
-            log::warn!("failed to decrypt folder name: {e}");
-            None
-        }
-    };
-    let fields = entry
-        .fields
-        .iter()
-        .map(|field| {
-            Ok(DecryptedField {
-                name: field
-                    .name
-                    .as_ref()
-                    .map(|name| {
-                        crate::actions::decrypt(
-                            name,
-                            entry.key.as_deref(),
-                            entry.org_id.as_deref(),
-                        )
-                    })
-                    .transpose()?,
-                value: field
-                    .value
-                    .as_ref()
-                    .map(|value| {
-                        crate::actions::decrypt(
-                            value,
-                            entry.key.as_deref(),
-                            entry.org_id.as_deref(),
-                        )
-                    })
-                    .transpose()?,
-                ty: field.ty,
-            })
-        })
-        .collect::<bin_error::Result<_>>()?;
-    let notes = entry
-        .notes
-        .as_ref()
-        .map(|notes| {
-            crate::actions::decrypt(
-                notes,
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            )
-        })
-        .transpose();
-    let notes = match notes {
-        Ok(notes) => notes,
-        Err(e) => {
-            log::warn!("failed to decrypt notes: {e}");
-            None
-        }
-    };
-    let history = entry
-        .history
-        .iter()
-        .map(|history_entry| {
-            Ok(DecryptedHistoryEntry {
-                last_used_date: history_entry.last_used_date.clone(),
-                password: crate::actions::decrypt(
-                    &history_entry.password,
-                    entry.key.as_deref(),
-                    entry.org_id.as_deref(),
-                )?,
-            })
-        })
-        .collect::<bin_error::Result<_>>()?;
+/// Captures `DecryptBatch` slot indices for the per-variant fields of an
+/// entry's data payload. Mirrors `bwx::db::EntryData` so the assembly
+/// step can rebuild `DecryptedData` from the batch results.
+enum DataSlots {
+    Login {
+        username: Option<usize>,
+        password: Option<usize>,
+        totp: Option<usize>,
+        uris: Vec<(usize, Option<bwx::api::UriMatchType>)>,
+    },
+    Card {
+        cardholder_name: Option<usize>,
+        number: Option<usize>,
+        brand: Option<usize>,
+        exp_month: Option<usize>,
+        exp_year: Option<usize>,
+        code: Option<usize>,
+    },
+    Identity {
+        title: Option<usize>,
+        first_name: Option<usize>,
+        middle_name: Option<usize>,
+        last_name: Option<usize>,
+        address1: Option<usize>,
+        address2: Option<usize>,
+        address3: Option<usize>,
+        city: Option<usize>,
+        state: Option<usize>,
+        postal_code: Option<usize>,
+        country: Option<usize>,
+        phone: Option<usize>,
+        email: Option<usize>,
+        ssn: Option<usize>,
+        license_number: Option<usize>,
+        passport_number: Option<usize>,
+        username: Option<usize>,
+    },
+    SecureNote,
+    SshKey {
+        public_key: Option<usize>,
+        fingerprint: Option<usize>,
+        private_key: Option<usize>,
+    },
+}
 
-    let data = match &entry.data {
+fn stage_data(
+    b: &mut Batcher,
+    data: &bwx::db::EntryData,
+    key: Option<&str>,
+    org: Option<&str>,
+) -> DataSlots {
+    match data {
         bwx::db::EntryData::Login {
             username,
             password,
             totp,
             uris,
-        } => DecryptedData::Login {
-            username: decrypt_field(
-                Field::Username,
-                username.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            password: decrypt_field(
-                Field::Password,
-                password.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            totp: decrypt_field(
-                Field::Totp,
-                totp.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
+        } => DataSlots::Login {
+            username: b.push_opt(username.as_deref(), key, org),
+            password: b.push_opt(password.as_deref(), key, org),
+            totp: b.push_opt(totp.as_deref(), key, org),
             uris: uris
                 .iter()
-                .map(|s| {
-                    decrypt_field(
-                        Field::Uris,
-                        Some(&s.uri),
-                        entry.key.as_deref(),
-                        entry.org_id.as_deref(),
-                    )
-                    .map(|uri| DecryptedUri {
-                        uri,
-                        match_type: s.match_type,
-                    })
-                })
+                .map(|s| (b.push(&s.uri, key, org), s.match_type))
                 .collect(),
         },
         bwx::db::EntryData::Card {
@@ -674,43 +663,13 @@ pub(super) fn decrypt_cipher(
             exp_month,
             exp_year,
             code,
-        } => DecryptedData::Card {
-            cardholder_name: decrypt_field(
-                Field::Cardholder,
-                cardholder_name.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            number: decrypt_field(
-                Field::CardNumber,
-                number.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            brand: decrypt_field(
-                Field::Brand,
-                brand.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            exp_month: decrypt_field(
-                Field::ExpMonth,
-                exp_month.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            exp_year: decrypt_field(
-                Field::ExpYear,
-                exp_year.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            code: decrypt_field(
-                Field::Cvv,
-                code.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
+        } => DataSlots::Card {
+            cardholder_name: b.push_opt(cardholder_name.as_deref(), key, org),
+            number: b.push_opt(number.as_deref(), key, org),
+            brand: b.push_opt(brand.as_deref(), key, org),
+            exp_month: b.push_opt(exp_month.as_deref(), key, org),
+            exp_year: b.push_opt(exp_year.as_deref(), key, org),
+            code: b.push_opt(code.as_deref(), key, org),
         },
         bwx::db::EntryData::Identity {
             title,
@@ -730,145 +689,194 @@ pub(super) fn decrypt_cipher(
             license_number,
             passport_number,
             username,
-        } => DecryptedData::Identity {
-            title: decrypt_field(
-                Field::Title,
-                title.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            first_name: decrypt_field(
-                Field::FirstName,
-                first_name.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            middle_name: decrypt_field(
-                Field::MiddleName,
-                middle_name.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            last_name: decrypt_field(
-                Field::LastName,
-                last_name.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            address1: decrypt_field(
-                Field::Address1,
-                address1.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            address2: decrypt_field(
-                Field::Address2,
-                address2.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            address3: decrypt_field(
-                Field::Address3,
-                address3.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            city: decrypt_field(
-                Field::City,
-                city.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            state: decrypt_field(
-                Field::State,
-                state.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            postal_code: decrypt_field(
-                Field::PostalCode,
-                postal_code.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            country: decrypt_field(
-                Field::Country,
-                country.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            phone: decrypt_field(
-                Field::Phone,
-                phone.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            email: decrypt_field(
-                Field::Email,
-                email.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            ssn: decrypt_field(
-                Field::Ssn,
-                ssn.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            license_number: decrypt_field(
-                Field::License,
-                license_number.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            passport_number: decrypt_field(
-                Field::Passport,
-                passport_number.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            username: decrypt_field(
-                Field::Username,
-                username.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
+        } => DataSlots::Identity {
+            title: b.push_opt(title.as_deref(), key, org),
+            first_name: b.push_opt(first_name.as_deref(), key, org),
+            middle_name: b.push_opt(middle_name.as_deref(), key, org),
+            last_name: b.push_opt(last_name.as_deref(), key, org),
+            address1: b.push_opt(address1.as_deref(), key, org),
+            address2: b.push_opt(address2.as_deref(), key, org),
+            address3: b.push_opt(address3.as_deref(), key, org),
+            city: b.push_opt(city.as_deref(), key, org),
+            state: b.push_opt(state.as_deref(), key, org),
+            postal_code: b.push_opt(postal_code.as_deref(), key, org),
+            country: b.push_opt(country.as_deref(), key, org),
+            phone: b.push_opt(phone.as_deref(), key, org),
+            email: b.push_opt(email.as_deref(), key, org),
+            ssn: b.push_opt(ssn.as_deref(), key, org),
+            license_number: b.push_opt(license_number.as_deref(), key, org),
+            passport_number: b.push_opt(passport_number.as_deref(), key, org),
+            username: b.push_opt(username.as_deref(), key, org),
         },
-        bwx::db::EntryData::SecureNote => DecryptedData::SecureNote {},
+        bwx::db::EntryData::SecureNote => DataSlots::SecureNote,
         bwx::db::EntryData::SshKey {
             public_key,
             fingerprint,
             private_key,
-        } => DecryptedData::SshKey {
-            public_key: decrypt_field(
-                Field::PublicKey,
-                public_key.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            fingerprint: decrypt_field(
-                Field::Fingerprint,
-                fingerprint.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
-            private_key: decrypt_field(
-                Field::PrivateKey,
-                private_key.as_deref(),
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            ),
+        } => DataSlots::SshKey {
+            public_key: b.push_opt(public_key.as_deref(), key, org),
+            fingerprint: b.push_opt(fingerprint.as_deref(), key, org),
+            private_key: b.push_opt(private_key.as_deref(), key, org),
         },
-    };
+    }
+}
+
+fn assemble_data(b: &Batcher, slots: DataSlots) -> DecryptedData {
+    match slots {
+        DataSlots::Login {
+            username,
+            password,
+            totp,
+            uris,
+        } => DecryptedData::Login {
+            username: b.take_optional(username, Field::Username),
+            password: b.take_optional(password, Field::Password),
+            totp: b.take_optional(totp, Field::Totp),
+            uris: uris
+                .into_iter()
+                .map(|(idx, match_type)| {
+                    b.take_optional(Some(idx), Field::Uris)
+                        .map(|uri| DecryptedUri { uri, match_type })
+                })
+                .collect(),
+        },
+        DataSlots::Card {
+            cardholder_name,
+            number,
+            brand,
+            exp_month,
+            exp_year,
+            code,
+        } => DecryptedData::Card {
+            cardholder_name: b
+                .take_optional(cardholder_name, Field::Cardholder),
+            number: b.take_optional(number, Field::CardNumber),
+            brand: b.take_optional(brand, Field::Brand),
+            exp_month: b.take_optional(exp_month, Field::ExpMonth),
+            exp_year: b.take_optional(exp_year, Field::ExpYear),
+            code: b.take_optional(code, Field::Cvv),
+        },
+        DataSlots::Identity {
+            title,
+            first_name,
+            middle_name,
+            last_name,
+            address1,
+            address2,
+            address3,
+            city,
+            state,
+            postal_code,
+            country,
+            phone,
+            email,
+            ssn,
+            license_number,
+            passport_number,
+            username,
+        } => DecryptedData::Identity {
+            title: b.take_optional(title, Field::Title),
+            first_name: b.take_optional(first_name, Field::FirstName),
+            middle_name: b.take_optional(middle_name, Field::MiddleName),
+            last_name: b.take_optional(last_name, Field::LastName),
+            address1: b.take_optional(address1, Field::Address1),
+            address2: b.take_optional(address2, Field::Address2),
+            address3: b.take_optional(address3, Field::Address3),
+            city: b.take_optional(city, Field::City),
+            state: b.take_optional(state, Field::State),
+            postal_code: b.take_optional(postal_code, Field::PostalCode),
+            country: b.take_optional(country, Field::Country),
+            phone: b.take_optional(phone, Field::Phone),
+            email: b.take_optional(email, Field::Email),
+            ssn: b.take_optional(ssn, Field::Ssn),
+            license_number: b.take_optional(license_number, Field::License),
+            passport_number: b
+                .take_optional(passport_number, Field::Passport),
+            username: b.take_optional(username, Field::Username),
+        },
+        DataSlots::SecureNote => DecryptedData::SecureNote {},
+        DataSlots::SshKey {
+            public_key,
+            fingerprint,
+            private_key,
+        } => DecryptedData::SshKey {
+            public_key: b.take_optional(public_key, Field::PublicKey),
+            fingerprint: b.take_optional(fingerprint, Field::Fingerprint),
+            private_key: b.take_optional(private_key, Field::PrivateKey),
+        },
+    }
+}
+
+pub(super) fn decrypt_cipher(
+    entry: &bwx::db::Entry,
+) -> bin_error::Result<DecryptedCipher> {
+    let key = entry.key.as_deref();
+    let org = entry.org_id.as_deref();
+    let mut b = Batcher::new();
+
+    let name_idx = b.push(&entry.name, key, org);
+    // Folder names always use the local key — folders are scoped to the
+    // user's vault, never an organization.
+    let folder_idx = b.push_opt(entry.folder.as_deref(), None, None);
+    let notes_idx = b.push_opt(entry.notes.as_deref(), key, org);
+
+    let field_slots: Vec<(
+        Option<usize>,
+        Option<usize>,
+        Option<bwx::api::FieldType>,
+    )> = entry
+        .fields
+        .iter()
+        .map(|f| {
+            (
+                b.push_opt(f.name.as_deref(), key, org),
+                b.push_opt(f.value.as_deref(), key, org),
+                f.ty,
+            )
+        })
+        .collect();
+
+    let history_slots: Vec<(String, usize)> = entry
+        .history
+        .iter()
+        .map(|h| (h.last_used_date.clone(), b.push(&h.password, key, org)))
+        .collect();
+
+    let data_slots = stage_data(&mut b, &entry.data, key, org);
+
+    b.run()?;
+
+    let name = b.take_required(name_idx)?;
+    let folder = b.take_optional(folder_idx, "folder name");
+    let notes = b.take_optional(notes_idx, Field::Notes);
+
+    let fields = field_slots
+        .into_iter()
+        .map(|(n_idx, v_idx, ty)| {
+            Ok(DecryptedField {
+                name: n_idx.map(|i| b.take_required(i)).transpose()?,
+                value: v_idx.map(|i| b.take_required(i)).transpose()?,
+                ty,
+            })
+        })
+        .collect::<bin_error::Result<_>>()?;
+
+    let history = history_slots
+        .into_iter()
+        .map(|(date, idx)| {
+            Ok(DecryptedHistoryEntry {
+                last_used_date: date,
+                password: b.take_required(idx)?,
+            })
+        })
+        .collect::<bin_error::Result<_>>()?;
+
+    let data = assemble_data(&b, data_slots);
 
     Ok(DecryptedCipher {
         id: entry.id.clone(),
         folder,
-        name: crate::actions::decrypt(
-            &entry.name,
-            entry.key.as_deref(),
-            entry.org_id.as_deref(),
-        )?,
+        name,
         data,
         fields,
         notes,
