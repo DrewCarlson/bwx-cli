@@ -76,11 +76,11 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       # Generated *before* the macOS signing step so the binary is
-      # still execable to drive `gen-completions`. After signing with
-      # hardened runtime + a `keychain-access-groups` entitlement, AMFI
-      # rejects the binary on first exec (CDHash isn't yet known to
-      # Apple), so a `--version` check would `Killed: 9`. Completions
-      # are pure text and target-independent.
+      # still execable to drive `gen-completions`. Once signed with
+      # hardened runtime + entitlements, AMFI gets stricter about
+      # first-exec gates and a `--version` smoke check during this
+      # job is fragile. Completions are pure text and target-
+      # independent, so generating them before signing is fine.
       - name: Generate shell completions
         run: |
           mkdir -p target/${{ matrix.target }}/release/completion

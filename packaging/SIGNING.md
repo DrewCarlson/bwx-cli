@@ -137,13 +137,13 @@ Gatekeeper prompts. Requires a paid Apple Developer account.
    HARDENED_RUNTIME=1 ./scripts/sign-macos.sh ~/.cargo/bin
    codesign -dv --verbose=4 ~/.cargo/bin/bwx
    # → "flags=0x10000(runtime)" confirms hardened runtime is on
-   # → "TeamIdentifier=…" + "keychain-access-groups=…" confirms entitlements
+   # → "TeamIdentifier=…" confirms the Developer ID team identity
    ```
 
 ### What CI does on each tagged release
 
 - Imports the .p12 into a per-job temporary keychain (random PW, deleted at job-end).
-- Runs `scripts/sign-macos.sh` with `HARDENED_RUNTIME=1` so binaries get the hardened runtime + the `keychain-access-groups` and `allow-unsigned-executable-memory` entitlements.
+- Runs `scripts/sign-macos.sh` with `HARDENED_RUNTIME=1` so binaries get the hardened runtime plus the `allow-unsigned-executable-memory` entitlement (Rust's allocator needs it; auto-granted by notarization).
 - Bundles `bwx` + `bwx-agent` + completions + docs into the per-target tarball.
 - Submits the tarball to Apple's Notary Service via `notarytool submit --wait`. Bare CLI binaries inside a tarball can't be stapled — the notarization ticket is recorded server-side and Gatekeeper validates online on first run.
 - Tears down the keychain even if any prior step failed (`if: always()`).

@@ -260,21 +260,14 @@ The Homebrew install ships pre-signed with Developer ID and is
 notarized by Apple, so users coming through `brew` don't need to
 think about any of this.
 
-Keychain security varies by tier:
-
-| Identity                 | Keychain item ACL                                |
-|--------------------------|--------------------------------------------------|
-| Developer ID Application | OS-enforced biometric ACL — strongest.           |
-| Apple Development        | Plain item; Touch ID enforced by bwx-agent only. |
-| Ad-hoc                   | Same as Apple Development.                       |
-
-Only Developer ID Application carries `keychain-access-groups` on a
-CLI binary; the other tiers would need a provisioning profile, which
-bare binaries can't have. The runtime detects which entitlements the
-installed binary actually holds and branches automatically — the same
-source builds all three tiers. Upgrading tiers later: re-run
-`./scripts/install.sh`, then `bwx touchid disable && bwx touchid enroll`
-to migrate the Keychain item.
+Touch ID is enforced by the agent: `require_presence` runs an
+`LAContext.evaluatePolicy` prompt before the wrapper key leaves the
+Keychain. Item-level biometric ACLs would require a provisioning
+profile, which a bare CLI Mach-O can't carry, so all three tiers use
+the same presence-checked path. The Developer ID tier still adds
+real isolation — Keychain items are scoped to the team's implicit
+access group, so other-process-same-uid attackers signed by a
+different identity can't read them.
 
 ## `bwx setup-macos`
 
