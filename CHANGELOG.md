@@ -2,6 +2,14 @@
 
 ## [2.2.2] - Unreleased
 
+* **Faster `bwx get`/`code`/`edit`/`remove`/`history`/`search` on
+  large vaults.** `find_entry` and `search` previously made one IPC
+  round-trip per cipherstring per entry (name + username + folder +
+  notes + every URI + every custom field), which scaled as
+  O(entries × fields) and could easily reach hundreds of round-trips
+  on a sync. Both now route through a new `decrypt_search_ciphers`
+  helper that bundles every field into a single `DecryptBatch` IPC,
+  with the agent decrypting them in one shot.
 * **Configurable diagnostic logging.** New `logging` config key
   (`bwx config set logging on|off`, default `on`) toggles a single
   bucket of diagnostic output written to stderr — error/warning

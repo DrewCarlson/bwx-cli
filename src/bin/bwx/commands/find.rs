@@ -1,6 +1,6 @@
 use super::cipher::{DecryptedCipher, DecryptedSearchCipher};
 use super::decrypt::{
-    decrypt_cipher, decrypt_cipher_using_search, decrypt_search_cipher,
+    decrypt_cipher, decrypt_cipher_using_search, decrypt_search_ciphers,
 };
 use crate::bin_error;
 
@@ -142,14 +142,9 @@ pub(super) fn find_entry(
         needle = Needle::Name(s);
     }
 
-    let ciphers: Vec<(bwx::db::Entry, DecryptedSearchCipher)> = db
-        .entries
-        .iter()
-        .map(|entry| {
-            decrypt_search_cipher(entry)
-                .map(|decrypted| (entry.clone(), decrypted))
-        })
-        .collect::<bin_error::Result<_>>()?;
+    let decrypted = decrypt_search_ciphers(&db.entries)?;
+    let ciphers: Vec<(bwx::db::Entry, DecryptedSearchCipher)> =
+        db.entries.iter().cloned().zip(decrypted).collect();
     let (entry, search) =
         find_entry_raw(&ciphers, &needle, username, folder, ignore_case)?;
     let decrypted_entry = decrypt_cipher_using_search(&entry, &search)?;

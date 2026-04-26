@@ -2,7 +2,7 @@ use std::io::Write as _;
 
 use super::auth::unlock;
 use super::cipher::{DecryptedData, DecryptedListCipher};
-use super::decrypt::{decrypt_list_ciphers, decrypt_search_cipher};
+use super::decrypt::{decrypt_list_ciphers, decrypt_search_ciphers};
 use super::field::ListField;
 use super::find::{find_entry, Needle};
 use super::totp::generate_totp;
@@ -149,17 +149,12 @@ pub fn search(
 
     let db = load_db()?;
 
-    let mut entries: Vec<DecryptedListCipher> = db
-        .entries
-        .iter()
-        .map(decrypt_search_cipher)
-        .filter(|entry| {
-            entry
-                .as_ref()
-                .map_or(true, |entry| entry.search_match(term, folder))
-        })
-        .map(|entry| entry.map(std::convert::Into::into))
-        .collect::<Result<_, crate::bin_error::Error>>()?;
+    let mut entries: Vec<DecryptedListCipher> =
+        decrypt_search_ciphers(&db.entries)?
+            .into_iter()
+            .filter(|entry| entry.search_match(term, folder))
+            .map(std::convert::Into::into)
+            .collect();
     entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
     print_entry_list(&entries, &fields, raw)?;

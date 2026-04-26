@@ -223,105 +223,220 @@ pub(super) fn decrypt_list_ciphers(
     Ok(out)
 }
 
-pub(super) fn decrypt_search_cipher(
-    entry: &bwx::db::Entry,
-) -> bin_error::Result<DecryptedSearchCipher> {
-    let id = entry.id.clone();
-    let name = crate::actions::decrypt(
-        &entry.name,
-        entry.key.as_deref(),
-        entry.org_id.as_deref(),
-    )?;
-    let user = match &entry.data {
-        bwx::db::EntryData::Login { username, .. } => decrypt_field(
-            Field::Username,
-            username.as_deref(),
+/// Batched search-cipher decrypt: stages every per-field decrypt for the
+/// whole entry slice into one `DecryptBatch` IPC, then assembles them
+/// back into per-entry search ciphers. Avoids the N-IPC-per-entry
+/// blow-up `find_entry`/`search` would otherwise inflict on large
+/// vaults.
+pub(super) fn decrypt_search_ciphers(
+    entries: &[bwx::db::Entry],
+) -> bin_error::Result<Vec<DecryptedSearchCipher>> {
+    struct Slots<'a> {
+        entry: &'a bwx::db::Entry,
+        name_idx: usize,
+        user_idx: Option<usize>,
+        folder_idx: Option<usize>,
+        notes_idx: Option<usize>,
+        uri_indices: Vec<usize>,
+        field_indices: Vec<usize>,
+    }
+
+    let mut items: Vec<bwx::protocol::DecryptItem> = Vec::new();
+    let mut slots: Vec<Slots> = Vec::with_capacity(entries.len());
+
+    let push = |items: &mut Vec<bwx::protocol::DecryptItem>,
+                cipherstring: &str,
+                entry_key: Option<&str>,
+                org_id: Option<&str>|
+     -> usize {
+        items.push(bwx::protocol::DecryptItem {
+            cipherstring: cipherstring.to_string(),
+            entry_key: entry_key.map(std::string::ToString::to_string),
+            org_id: org_id.map(std::string::ToString::to_string),
+        });
+        items.len() - 1
+    };
+
+    for entry in entries {
+        let name_idx = push(
+            &mut items,
+            &entry.name,
             entry.key.as_deref(),
             entry.org_id.as_deref(),
-        ),
-        _ => None,
-    };
-    // folder name should always be decrypted with the local key because
-    // folders are local to a specific user's vault, not the organization
-    let folder = entry
-        .folder
-        .as_ref()
-        .map(|folder| crate::actions::decrypt(folder, None, None))
-        .transpose()?;
-    let notes = entry
-        .notes
-        .as_ref()
-        .map(|notes| {
-            crate::actions::decrypt(
-                notes,
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            )
-        })
-        .transpose();
-    let uris = if let bwx::db::EntryData::Login { uris, .. } = &entry.data {
-        uris.iter()
-            .filter_map(|s| {
-                decrypt_field(
-                    Field::Uris,
-                    Some(&s.uri),
-                    entry.key.as_deref(),
-                    entry.org_id.as_deref(),
-                )
-                .map(|uri| (uri, s.match_type))
-            })
-            .collect()
-    } else {
-        vec![]
-    };
-    let fields = entry
-        .fields
-        .iter()
-        .filter_map(|field| {
-            if field.ty == Some(bwx::api::FieldType::Hidden) {
-                None
-            } else {
-                field.value.as_ref()
-            }
-        })
-        .map(|value| {
-            crate::actions::decrypt(
-                value,
-                entry.key.as_deref(),
-                entry.org_id.as_deref(),
-            )
-        })
-        .collect::<bin_error::Result<_>>()?;
-    let notes = match notes {
-        Ok(notes) => notes,
-        Err(e) => {
-            log::warn!("failed to decrypt notes: {e}");
-            None
-        }
-    };
-    let entry_type = (match &entry.data {
-        bwx::db::EntryData::Login { .. } => "Login",
-        bwx::db::EntryData::Identity { .. } => "Identity",
-        bwx::db::EntryData::SshKey { .. } => "SSH Key",
-        bwx::db::EntryData::SecureNote => "Note",
-        bwx::db::EntryData::Card { .. } => "Card",
-    })
-    .to_string();
+        );
 
-    Ok(DecryptedSearchCipher {
-        id,
-        entry_type,
-        folder,
-        name,
-        user,
-        uris,
-        fields,
-        notes,
-    })
+        let user_idx = match &entry.data {
+            bwx::db::EntryData::Login {
+                username: Some(u), ..
+            } => Some(push(
+                &mut items,
+                u,
+                entry.key.as_deref(),
+                entry.org_id.as_deref(),
+            )),
+            _ => None,
+        };
+
+        // Folder names always use the local key (folders are scoped to
+        // the user's vault, never an organization).
+        let folder_idx = entry
+            .folder
+            .as_ref()
+            .map(|f| push(&mut items, f, None, None));
+
+        let notes_idx = entry.notes.as_ref().map(|n| {
+            push(&mut items, n, entry.key.as_deref(), entry.org_id.as_deref())
+        });
+
+        let uri_indices = match &entry.data {
+            bwx::db::EntryData::Login { uris, .. } => uris
+                .iter()
+                .map(|s| {
+                    push(
+                        &mut items,
+                        &s.uri,
+                        entry.key.as_deref(),
+                        entry.org_id.as_deref(),
+                    )
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+
+        let field_indices = entry
+            .fields
+            .iter()
+            .filter_map(|field| {
+                if field.ty == Some(bwx::api::FieldType::Hidden) {
+                    None
+                } else {
+                    field.value.as_ref().map(|v| {
+                        push(
+                            &mut items,
+                            v,
+                            entry.key.as_deref(),
+                            entry.org_id.as_deref(),
+                        )
+                    })
+                }
+            })
+            .collect();
+
+        slots.push(Slots {
+            entry,
+            name_idx,
+            user_idx,
+            folder_idx,
+            notes_idx,
+            uri_indices,
+            field_indices,
+        });
+    }
+
+    let results = if items.is_empty() {
+        Vec::new()
+    } else {
+        crate::actions::decrypt_batch(items)?
+    };
+
+    let mut out = Vec::with_capacity(slots.len());
+    for s in slots {
+        // Name failure is fatal — matches the previous per-entry path.
+        let name = match &results[s.name_idx] {
+            Ok(p) => p.clone(),
+            Err(e) => {
+                return Err(crate::bin_error::err!(
+                    "failed to decrypt entry name: {e}"
+                ));
+            }
+        };
+
+        let user = s.user_idx.and_then(|i| match &results[i] {
+            Ok(p) => Some(p.clone()),
+            Err(e) => {
+                log::warn!("failed to decrypt {}: {e}", Field::Username);
+                None
+            }
+        });
+
+        // Folder failure was fatal in the prior path; preserved.
+        let folder = match s.folder_idx {
+            Some(i) => match &results[i] {
+                Ok(p) => Some(p.clone()),
+                Err(e) => {
+                    return Err(crate::bin_error::err!(
+                        "failed to decrypt folder name: {e}"
+                    ));
+                }
+            },
+            None => None,
+        };
+
+        let notes = s.notes_idx.and_then(|i| match &results[i] {
+            Ok(p) => Some(p.clone()),
+            Err(e) => {
+                log::warn!("failed to decrypt notes: {e}");
+                None
+            }
+        });
+
+        let uri_match_types: Vec<Option<bwx::api::UriMatchType>> =
+            if let bwx::db::EntryData::Login { uris, .. } = &s.entry.data {
+                uris.iter().map(|u| u.match_type).collect()
+            } else {
+                Vec::new()
+            };
+
+        let uris = s
+            .uri_indices
+            .iter()
+            .zip(uri_match_types)
+            .filter_map(|(i, mt)| match &results[*i] {
+                Ok(p) => Some((p.clone(), mt)),
+                Err(e) => {
+                    log::warn!("failed to decrypt {}: {e}", Field::Uris);
+                    None
+                }
+            })
+            .collect();
+
+        let fields = s
+            .field_indices
+            .iter()
+            .map(|i| match &results[*i] {
+                Ok(p) => Ok(p.clone()),
+                Err(e) => Err(crate::bin_error::err!(
+                    "failed to decrypt entry field: {e}"
+                )),
+            })
+            .collect::<bin_error::Result<_>>()?;
+
+        let entry_type = (match &s.entry.data {
+            bwx::db::EntryData::Login { .. } => "Login",
+            bwx::db::EntryData::Identity { .. } => "Identity",
+            bwx::db::EntryData::SshKey { .. } => "SSH Key",
+            bwx::db::EntryData::SecureNote => "Note",
+            bwx::db::EntryData::Card { .. } => "Card",
+        })
+        .to_string();
+
+        out.push(DecryptedSearchCipher {
+            id: s.entry.id.clone(),
+            entry_type,
+            folder,
+            name,
+            user,
+            uris,
+            fields,
+            notes,
+        });
+    }
+
+    Ok(out)
 }
 
 /// Build a `DecryptedCipher` for an entry that we already searched, reusing
-/// the plaintext fields that `decrypt_search_cipher` already produced
+/// the plaintext fields that `decrypt_search_ciphers` already produced
 /// (name, folder, notes, login username/URIs). Saves the redundant IPC
 /// round-trips for those fields on every `bwx get`/`code`/etc. lookup.
 pub(super) fn decrypt_cipher_using_search(
