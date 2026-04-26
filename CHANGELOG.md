@@ -11,6 +11,9 @@
 * Skip the second KDF run during `bwx login`. The agent now reuses the
   `Identity` produced while authenticating to unlock the vault,
   shaving 100-500ms off Argon2id-backed accounts on first login.
+* Cache the agent protocol-version probe within a single CLI
+  invocation, so commands that re-enter `ensure_agent` (e.g.
+  `--clipboard`) don't pay for a redundant IPC round-trip.
 
 ## [2.1.0] - 2026-04-26
 

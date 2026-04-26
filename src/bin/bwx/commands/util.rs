@@ -195,6 +195,15 @@ fn check_config() -> bin_error::Result<()> {
 }
 
 pub(super) fn check_agent_version() -> bin_error::Result<()> {
+    // Within a single CLI invocation the agent process can't change
+    // versions on us, so cache the successful probe and skip the IPC
+    // round-trip on subsequent calls (e.g. the second `ensure_agent`
+    // triggered by `--clipboard`).
+    static VERIFIED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if VERIFIED.get().is_some() {
+        return Ok(());
+    }
+
     let client_version = bwx::protocol::VERSION;
     let agent_version = version_or_quit()?;
     if agent_version != client_version {
@@ -203,6 +212,7 @@ pub(super) fn check_agent_version() -> bin_error::Result<()> {
             "client protocol version is {client_version} but agent protocol version is {agent_version}"
         ));
     }
+    let _ = VERIFIED.set(());
     Ok(())
 }
 
