@@ -1,6 +1,6 @@
 # Changelog
 
-## [2.2.1] - Unreleased
+## [2.2.1] - 2026-04-26
 
 * **Same-team peer verification on the agent socket (macOS).** When
   the agent itself is signed with a Team Identifier (Developer ID or
