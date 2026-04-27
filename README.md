@@ -239,35 +239,32 @@ sha256sum -c SHA256SUMS
 
 ## Code signing
 
-**No paid Apple Developer cert? You're fine.** If `scripts/install.sh`
-can't find one in your keychain it falls back to ad-hoc signing
-(`codesign -s -`) and the agent still works for personal use — Touch
-ID prompts are enforced by `bwx-agent`'s own `LAContext` call instead
-of an OS-level Keychain ACL.
+Touch ID works on every install path. Homebrew and GitHub release
+builds are signed with Developer ID and notarized; `cargo install`
+and source builds are signed ad-hoc by `scripts/sign-macos.sh`,
+which `scripts/install.sh` runs automatically.
 
-The full picture: `cargo install` produces unsigned binaries; macOS
-AMFI kills unsigned processes that touch the Keychain.
-`scripts/install.sh` wraps `cargo install` and runs
-`scripts/sign-macos.sh`, which auto-picks the strongest signing
-identity on your machine:
+The signing tier picks where the Touch ID wrapper key is stored:
 
-1. `$IDENTITY` env var (explicit override).
-2. Developer ID Application cert (paid Apple Developer program).
-3. Apple Development cert (free via Xcode).
-4. Ad-hoc (`-`) — no cert required.
+- Developer ID builds carry `keychain-access-groups = ["TEAMID.bwx"]`
+  and use the data-protection keychain. Items are scoped to the team,
+  so other processes signed by another identity can't read them, and
+  upgrades never re-prompt for keychain access.
+- Ad-hoc, Apple Development, and `cargo install` builds use the
+  legacy login keychain. The first run after a reinstall may show a
+  one-time "always allow" prompt.
 
-The Homebrew install ships pre-signed with Developer ID and is
-notarized by Apple, so users coming through `brew` don't need to
-think about any of this.
+bwx detects which path applies at startup and picks the keychain
+accordingly. The biometric prompt itself is identical on both:
+`bwx-agent` runs `LAContext.evaluatePolicy` before releasing the
+wrapper key. Items are stored with
+`kSecAttrAccessibleWhenUnlockedThisDeviceOnly` and don't sync to
+iCloud.
 
-Touch ID is enforced by the agent: `require_presence` runs an
-`LAContext.evaluatePolicy` prompt before the wrapper key leaves the
-Keychain. Item-level biometric ACLs would require a provisioning
-profile, which a bare CLI Mach-O can't carry, so all three tiers use
-the same presence-checked path. The Developer ID tier still adds
-real isolation — Keychain items are scoped to the team's implicit
-access group, so other-process-same-uid attackers signed by a
-different identity can't read them.
+`scripts/sign-macos.sh` picks the strongest available identity:
+`$IDENTITY` override, then Developer ID, then Apple Development,
+then ad-hoc. Set `TEAM_ID=…` if the script can't parse the team
+prefix from the identity string.
 
 ## `bwx setup-macos`
 
