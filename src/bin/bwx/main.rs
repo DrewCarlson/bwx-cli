@@ -2,7 +2,7 @@ use clap::{CommandFactory as _, Parser as _};
 
 use crate::bin_error::ContextExt as _;
 #[cfg(target_os = "macos")]
-use crate::cli::TouchIdCmd;
+use crate::cli::BiometricCmd;
 use crate::cli::{CompletionShell, Config, Opt};
 
 mod actions;
@@ -163,15 +163,13 @@ fn main() {
             Ok(())
         }
         #[cfg(target_os = "macos")]
-        Opt::TouchId { cmd } => match cmd {
-            TouchIdCmd::Enroll => commands::touchid_enroll(),
-            TouchIdCmd::Disable => commands::touchid_disable(),
-            TouchIdCmd::Status => commands::touchid_status(),
+        Opt::Biometric { cmd } => match cmd {
+            BiometricCmd::Enroll => commands::biometric_enroll(),
+            BiometricCmd::Disable => commands::biometric_disable(),
+            BiometricCmd::Status => commands::biometric_status(),
         },
-        #[cfg(target_os = "macos")]
-        Opt::SetupMacos { force } => commands::setup_macos(force),
-        #[cfg(target_os = "macos")]
-        Opt::TeardownMacos => commands::teardown_macos(),
+        Opt::SetupOs { force } => commands::setup_os(force),
+        Opt::TeardownOs => commands::teardown_os(),
         Opt::GenCompletions { shell } => {
             match shell {
                 CompletionShell::Bash => {

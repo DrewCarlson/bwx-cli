@@ -3,7 +3,7 @@ use crate::prelude::*;
 use std::io::{Read as _, Write as _};
 
 pub fn edit(contents: &str, help: &str) -> Result<String> {
-    if !rustix::termios::isatty(std::io::stdin()) {
+    if !is_stdin_tty() {
         // directly read from piped content
         return match std::io::read_to_string(std::io::stdin()) {
             Err(e) => Err(Error::FailedToReadFromStdin { err: e }),
@@ -86,6 +86,22 @@ pub fn edit(contents: &str, help: &str) -> Result<String> {
     drop(fh);
 
     Ok(contents)
+}
+
+#[cfg(unix)]
+fn is_stdin_tty() -> bool {
+    rustix::termios::isatty(std::io::stdin())
+}
+
+#[cfg(windows)]
+fn is_stdin_tty() -> bool {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::System::Console::GetConsoleMode;
+    let h: windows_sys::Win32::Foundation::HANDLE =
+        std::io::stdin().as_raw_handle().cast();
+    let mut mode: u32 = 0;
+    // SAFETY: stdin handle from std; mode out-param.
+    unsafe { GetConsoleMode(h, &mut mode) != 0 }
 }
 
 fn contains_shell_metacharacters(cmd: &std::ffi::OsStr) -> bool {

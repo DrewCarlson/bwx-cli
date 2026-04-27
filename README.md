@@ -22,7 +22,7 @@ Drop-in replacement on Linux/BSD.
   system Aqua dialogs; pinentry isn't required.
 - **SSH agent built in.** Serve vault-stored SSH keys, including git
   commit/tag signing via `gpg.format = ssh`.
-- **One-shot macOS setup.** `bwx setup-macos` installs the LaunchAgent
+- **One-shot macOS setup.** `bwx setup-os` installs the LaunchAgent
   that keeps `bwx-agent` alive and registers the SSH-agent socket so
   terminal sessions (and the GUI apps they launch) can use it via a
   one-line shell-rc export.
@@ -33,7 +33,7 @@ Drop-in replacement on Linux/BSD.
 
 ```sh
 brew install DrewCarlson/tap/bwx-cli
-bwx setup-macos               # LaunchAgent that keeps bwx-agent alive
+bwx setup-os                  # LaunchAgent that keeps bwx-agent alive
 ```
 
 ### Everywhere else
@@ -112,21 +112,21 @@ default — configurable). `bwx help` lists every subcommand.
 Enroll once:
 
 ```sh
-bwx unlock                  # master password
-bwx touchid enroll          # wrap vault keys under a biometric key
-bwx touchid status          # confirm
+bwx unlock                    # master password
+bwx biometric enroll          # wrap vault keys under a biometric key
+bwx biometric status          # confirm
 ```
 
 After enrollment Touch ID alone unlocks the vault. The master password
-is needed again only if you `bwx touchid disable`, change your
+is needed again only if you `bwx biometric disable`, change your
 enrolled fingerprint set, or re-authenticate with the server.
 
 Optionally prompt Touch ID on each sensitive operation:
 
 ```sh
-bwx config set touchid_gate all       # every vault read + sign
-bwx config set touchid_gate signing   # only SSH signs + TOTP codes
-bwx config set touchid_gate off       # default
+bwx config set biometric_gate all       # every vault read + sign
+bwx config set biometric_gate signing   # only SSH signs + TOTP codes
+bwx config set biometric_gate off       # default
 ```
 
 Prompts are coalesced: one `bwx <command>` triggers one Touch ID
@@ -138,7 +138,7 @@ bwx-agent exposes an SSH agent that serves SSH keys stored in your
 vault. Store an "SSH Key" item, then:
 
 ```sh
-# Configured automatically by `bwx setup-macos`; explicit equivalent:
+# Configured automatically by `bwx setup-os`; explicit equivalent:
 export SSH_AUTH_SOCK="$(bwx ssh-socket)"
 
 ssh-add -L                  # list keys
@@ -195,7 +195,7 @@ bwx config unset <key>
 | `base_url` | `https://api.bitwarden.com` | Self-hosted server URL. |
 | `lock_timeout` | `3600` | Seconds idle → re-lock. |
 | `sync_interval` | `3600` | Seconds between auto-syncs. `0` disables. |
-| `touchid_gate` | `off` | `off` / `signing` / `all`. |
+| `biometric_gate` | `off` | `off` / `signing` / `all`. |
 | `macos_unlock_dialog` | `true` (macOS) | Native dialog vs. pinentry. |
 | `ssh_confirm_sign` | `false` | Pinentry CONFIRM before each SSH sign. |
 | `pinentry` | `pinentry` | Pinentry binary to use. |
@@ -266,9 +266,9 @@ iCloud.
 then ad-hoc. Set `TEAM_ID=…` if the script can't parse the team
 prefix from the identity string.
 
-## `bwx setup-macos`
+## `bwx setup-os`
 
-Installs two LaunchAgents under `~/Library/LaunchAgents/`:
+On macOS, installs two LaunchAgents under `~/Library/LaunchAgents/`:
 
 - **`drews.website.bwx.ssh-auth-sock`** — runs `~/bin/bwx-set-ssh-sock` at
   login, which calls `launchctl setenv SSH_AUTH_SOCK $(bwx ssh-socket)`.
@@ -277,4 +277,7 @@ Installs two LaunchAgents under `~/Library/LaunchAgents/`:
   launchd supervision with `KeepAlive`. Log output lands in
   `~/Library/Application Support/bwx/launchd-agent.{out,err}`.
 
-`bwx teardown-macos` unloads both and removes the files.
+`bwx teardown-os` unloads both and removes the files.
+
+On non-macOS platforms the command currently prints a not-implemented
+message and exits successfully.

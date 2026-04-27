@@ -1,16 +1,31 @@
+#[cfg(unix)]
 use std::io::Write as _;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt as _;
+#[cfg(unix)]
 use std::os::unix::io::{AsFd as _, OwnedFd};
 
 use crate::bin_error::{self, ContextExt as _};
 
+#[cfg(unix)]
 pub struct StartupAck {
     writer: OwnedFd,
 }
 
+#[cfg(windows)]
+pub struct StartupAck;
+
+#[cfg(unix)]
 impl StartupAck {
     pub fn ack(self) -> bin_error::Result<()> {
         rustix::io::write(&self.writer, &[0])?;
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl StartupAck {
+    pub fn ack(self) -> bin_error::Result<()> {
         Ok(())
     }
 }
@@ -20,6 +35,7 @@ impl StartupAck {
 /// uses. Applied uniformly so the `--no-daemonize` path (used by the
 /// launchd keepalive plist) doesn't spam its log every time launchd
 /// respawns into a still-occupied slot.
+#[cfg(unix)]
 fn lock_pidfile_or_exit_if_running() -> bin_error::Result<std::fs::File> {
     match open_and_lock_pidfile() {
         Ok(f) => Ok(f),
@@ -42,6 +58,7 @@ fn lock_pidfile_or_exit_if_running() -> bin_error::Result<std::fs::File> {
     }
 }
 
+#[cfg(unix)]
 fn open_and_lock_pidfile() -> bin_error::Result<std::fs::File> {
     let pidfile = std::fs::OpenOptions::new()
         .write(true)
@@ -58,6 +75,7 @@ fn open_and_lock_pidfile() -> bin_error::Result<std::fs::File> {
     Ok(pidfile)
 }
 
+#[cfg(unix)]
 fn redirect_fd_to<Fd: std::os::unix::io::AsFd>(
     src: Fd,
     target_raw: std::os::unix::io::RawFd,
@@ -74,6 +92,7 @@ fn redirect_fd_to<Fd: std::os::unix::io::AsFd>(
     Ok(())
 }
 
+#[cfg(unix)]
 pub fn daemonize(
     no_daemonize: bool,
 ) -> bin_error::Result<Option<StartupAck>> {
@@ -169,4 +188,164 @@ pub fn daemonize(
     std::mem::forget(pidfile);
 
     Ok(Some(StartupAck { writer: w }))
+}
+
+/// Windows daemon-detach. When invoked without `--no-daemonize`, the
+/// parent respawns `current_exe()` with `--no-daemonize` appended,
+/// using `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`
+/// so the child has no console attached, and redirects stdout/stderr
+/// to the agent log files. The parent exits immediately on success;
+/// no StartupAck round-trip is performed (PROC_THREAD_ATTRIBUTE_HANDLE_LIST
+/// is left as a follow-up — Unix's pipe-based ack doesn't transfer
+/// directly and the simplified flow matches the documented UX gap).
+#[cfg(windows)]
+pub fn daemonize(
+    no_daemonize: bool,
+) -> bin_error::Result<Option<StartupAck>> {
+    if no_daemonize {
+        return Ok(None);
+    }
+    spawn_detached_child().context("failed to spawn detached agent")?;
+    std::process::exit(0);
+}
+
+#[cfg(windows)]
+fn spawn_detached_child() -> bin_error::Result<()> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, TRUE};
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::System::Threading::{
+        CreateProcessW, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW,
+        DETACHED_PROCESS, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
+        STARTUPINFOW,
+    };
+
+    // Open log files inheritable so the child can dup them as stdout/stderr.
+    let stdout = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(bwx::dirs::agent_stdout_file())?;
+    let stderr = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(bwx::dirs::agent_stderr_file())?;
+
+    // Mark both handles inheritable.
+    let stdout_h: HANDLE = stdout.as_raw_handle().cast();
+    let stderr_h: HANDLE = stderr.as_raw_handle().cast();
+    set_handle_inheritable(stdout_h)?;
+    set_handle_inheritable(stderr_h)?;
+
+    // Build command line: "<exe>" --no-daemonize plus original extra args.
+    let exe = std::env::current_exe()
+        .context("failed to resolve current_exe for daemon respawn")?;
+    let mut cmdline = std::ffi::OsString::new();
+    cmdline.push("\"");
+    cmdline.push(exe.as_os_str());
+    cmdline.push("\" --no-daemonize");
+    // Forward any extra args after argv[1] (argv[1] is `--no-daemonize`
+    // marker for the unix path; on Windows we just append everything past
+    // argv[0] verbatim, deduplicating the daemonize flag we just added).
+    for arg in std::env::args().skip(1) {
+        if arg == "--no-daemonize" {
+            continue;
+        }
+        cmdline.push(" ");
+        cmdline.push(quote_arg(&arg));
+    }
+    let mut wide = bwx::win::wide::os_str_to_utf16_nul(&cmdline);
+
+    let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    si.cb = u32::try_from(std::mem::size_of::<STARTUPINFOW>())
+        .expect("STARTUPINFOW fits in u32");
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = std::ptr::null_mut();
+    si.hStdOutput = stdout_h;
+    si.hStdError = stderr_h;
+
+    let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+
+    // SAFETY: wide is a NUL-terminated, mutable command-line buffer
+    // (CreateProcessW requires writable storage); STARTUPINFOW and
+    // PROCESS_INFORMATION are stack-locals of the documented sizes;
+    // inheritable=TRUE so the child receives the redirected stdio.
+    let ok = unsafe {
+        CreateProcessW(
+            std::ptr::null(),
+            wide.as_mut_ptr(),
+            std::ptr::null::<SECURITY_ATTRIBUTES>(),
+            std::ptr::null::<SECURITY_ATTRIBUTES>(),
+            TRUE,
+            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut si,
+            &mut pi,
+        )
+    };
+    if ok == 0 {
+        return Err(bin_error::Error::with_context(
+            std::io::Error::last_os_error(),
+            "CreateProcessW",
+        ));
+    }
+    // SAFETY: hProcess and hThread are owned by us; close exactly once.
+    unsafe {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn set_handle_inheritable(
+    h: windows_sys::Win32::Foundation::HANDLE,
+) -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::{
+        SetHandleInformation, HANDLE_FLAG_INHERIT,
+    };
+    // SAFETY: caller passes a valid handle; flags are documented.
+    let ok = unsafe {
+        SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)
+    };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn quote_arg(arg: &str) -> std::ffi::OsString {
+    // CommandLineToArgvW round-trip: wrap in quotes, escape inner
+    // backslashes-before-quote and embedded quotes per the documented
+    // rules. Sufficient for forwarding arbitrary user-supplied args.
+    let mut out = std::ffi::OsString::new();
+    out.push("\"");
+    let mut backslashes = 0usize;
+    for ch in arg.chars() {
+        match ch {
+            '\\' => {
+                backslashes += 1;
+                out.push("\\");
+            }
+            '"' => {
+                for _ in 0..=backslashes {
+                    out.push("\\");
+                }
+                backslashes = 0;
+                out.push("\"");
+            }
+            _ => {
+                backslashes = 0;
+                let mut tmp = [0u8; 4];
+                out.push(ch.encode_utf8(&mut tmp));
+            }
+        }
+    }
+    for _ in 0..backslashes {
+        out.push("\\");
+    }
+    out.push("\"");
+    out
 }

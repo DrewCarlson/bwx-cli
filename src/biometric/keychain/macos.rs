@@ -1,4 +1,4 @@
-//! Keychain storage for bwx's Touch ID wrapper key.
+//! Keychain storage for bwx's biometric wrapper key.
 //!
 //! At process start we check whether the running binary carries an
 //! `application-identifier` entitlement (set by `scripts/sign-macos.sh`
@@ -38,6 +38,8 @@ use security_framework_sys::item::{
 use security_framework_sys::keychain_item::{
     SecItemAdd, SecItemCopyMatching, SecItemDelete,
 };
+
+use super::Error;
 
 // `kSecUseOperationPrompt`, `kSecAttrAccessible` (the dictionary KEY;
 // distinct from the `kSecAttrAccessible*` VALUE constants that are
@@ -114,37 +116,9 @@ fn push_dp_flag(
     }
 }
 
-/// Keychain generic-password `service` value shared by all bwx Touch ID
+/// Keychain generic-password `service` value shared by all bwx biometric
 /// items; per-enrollment labels distinguish them.
 const SERVICE: &str = "bwx";
-
-#[derive(Debug)]
-pub enum Error {
-    /// The biometric user cancelled the prompt or authentication failed.
-    UserCancelled,
-    /// `SecItem*` returned an auth-failed status. With the current
-    /// presence-only model this generally means the user denied the
-    /// prompt; callers handle it the same as `UserCancelled` but the
-    /// distinct variant lets logs say which the OS reported.
-    Invalidated,
-    /// The Keychain entry doesn't exist.
-    NotFound,
-    /// Any other error surfaced by `SecItem*`.
-    Os(String),
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UserCancelled => f.write_str("keychain: cancelled"),
-            Self::Invalidated => f.write_str("keychain: auth failed"),
-            Self::NotFound => f.write_str("keychain: item not found"),
-            Self::Os(s) => write!(f, "keychain: {s}"),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
 
 /// Store `secret` under the given label.
 pub fn store(label: &str, secret: &[u8]) -> Result<(), Error> {
@@ -262,7 +236,7 @@ pub fn delete(label: &str) -> Result<(), Error> {
 }
 
 /// Check whether an item exists under `label` without triggering any
-/// biometric prompt. Used by `bwx touchid status`.
+/// biometric prompt. Used by `bwx biometric status`.
 pub fn exists(label: &str) -> Result<bool, Error> {
     unsafe {
         let service = CFString::new(SERVICE);

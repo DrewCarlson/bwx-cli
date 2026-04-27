@@ -8,31 +8,31 @@ use crate::bin_error::{self, ContextExt as _};
 /// Gate a pending sensitive response on a Touch ID prompt if the user
 /// has opted in. The CLI-assigned `session_id` coalesces the many
 /// `Decrypt`/`Encrypt` IPCs of one `bwx <command>` into one prompt.
-/// Sessions expire after `TOUCHID_SESSION_TTL` of inactivity and are
+/// Sessions expire after `BIOMETRIC_SESSION_TTL` of inactivity and are
 /// flushed on lock. No-op on non-macOS.
-pub(super) async fn enforce_touchid_gate(
+pub(super) async fn enforce_biometric_gate(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
-    kind: bwx::touchid::Kind,
+    kind: bwx::biometric::Kind,
     session_id: Option<&str>,
     purpose: Option<&str>,
 ) -> bin_error::Result<()> {
     let gate = bwx::config::Config::load()
-        .map_or(bwx::touchid::Gate::Off, |c| c.touchid_gate);
-    if !bwx::touchid::gate_applies(gate, kind) {
+        .map_or(bwx::biometric::Gate::Off, |c| c.biometric_gate);
+    if !bwx::biometric::gate_applies(gate, kind) {
         return Ok(());
     }
     if let Some(id) = session_id {
         let mut s = state.lock().await;
-        if s.touchid_session_is_fresh(id) {
+        if s.biometric_session_is_fresh(id) {
             // Bump the idle timer so long commands don't expire mid-run.
-            s.record_touchid_session(id);
+            s.record_biometric_session(id);
             return Ok(());
         }
         // Session not fresh. If enrolled, evict in-memory keys so the
         // "vault stays locked at rest" invariant holds — the Touch ID
         // prompt below will re-load them from Keychain.
-        #[cfg(target_os = "macos")]
-        if bwx::touchid::blob::Blob::exists() {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if bwx::biometric::blob::Blob::exists() {
             s.priv_key = None;
             s.org_keys = None;
         }
@@ -42,7 +42,7 @@ pub(super) async fn enforce_touchid_gate(
         || format!("bwx: authorize {kind:?} access"),
         |p| format!("bwx: authorize {p}"),
     );
-    let ok = bwx::touchid::require_presence(&reason)
+    let ok = bwx::biometric::require_presence(&reason)
         .await
         .map_err(|e| bin_error::Error::msg(e.to_string()))?;
     if !ok {
@@ -59,14 +59,14 @@ pub(super) async fn enforce_touchid_gate(
     // and the next request should re-prompt rather than reuse this
     // auth window.
     if state.lock().await.needs_unlock()
-        && !try_unlock_via_touchid(state.clone()).await.is_unlocked()
+        && !try_unlock_via_biometric(state.clone()).await.is_unlocked()
     {
         return Err(bin_error::Error::msg(
             "Touch ID unlock failed after gate confirmation",
         ));
     }
     if let Some(id) = session_id {
-        state.lock().await.record_touchid_session(id);
+        state.lock().await.record_biometric_session(id);
     }
     Ok(())
 }
@@ -554,9 +554,9 @@ pub(super) async fn unlock_state(
         // active. Falls through to pinentry on cancel or error,
         // surfacing the reason in the first prompt so the user knows
         // why the master password is being asked for.
-        let touchid_hint = match try_unlock_via_touchid(state.clone()).await {
-            TouchIdUnlockOutcome::Unlocked => return Ok(()),
-            TouchIdUnlockOutcome::Fallback(reason) => Some(reason),
+        let biometric_hint = match try_unlock_via_biometric(state.clone()).await {
+            BiometricUnlockOutcome::Unlocked => return Ok(()),
+            BiometricUnlockOutcome::Fallback(reason) => Some(reason),
         };
 
         let db = load_db().await?;
@@ -591,7 +591,7 @@ pub(super) async fn unlock_state(
 
         // Seed the retry loop with the Touch ID fallback reason so the
         // first prompt explains why the user is seeing it.
-        let mut err_msg = touchid_hint.map(str::to_string);
+        let mut err_msg = biometric_hint.map(str::to_string);
         for i in 1_u8..=3 {
             let err = if i > 1 {
                 // this unwrap is safe because we only ever continue the loop
@@ -664,13 +664,13 @@ async fn unlock_success(
 /// why they're being asked for the master password instead of seeing a
 /// Touch ID dialog.
 #[derive(Debug)]
-enum TouchIdUnlockOutcome {
+enum BiometricUnlockOutcome {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Unlocked,
     Fallback(&'static str),
 }
 
-impl TouchIdUnlockOutcome {
+impl BiometricUnlockOutcome {
     fn is_unlocked(&self) -> bool {
         matches!(self, Self::Unlocked)
     }
@@ -680,84 +680,84 @@ impl TouchIdUnlockOutcome {
 /// Returns `Fallback(reason)` when enrollment is absent, the gate is
 /// off, or the user cancelled / biometry was invalidated — caller falls
 /// through to pinentry, optionally surfacing `reason` in the prompt.
-#[cfg(target_os = "macos")]
-async fn try_unlock_via_touchid(
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+async fn try_unlock_via_biometric(
     state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
-) -> TouchIdUnlockOutcome {
+) -> BiometricUnlockOutcome {
     let gate = bwx::config::Config::load()
-        .map_or(bwx::touchid::Gate::Off, |c| c.touchid_gate);
-    if matches!(gate, bwx::touchid::Gate::Off) {
-        log::debug!("touchid: gate is off; skipping Keychain unlock");
-        return TouchIdUnlockOutcome::Fallback(
-            "Touch ID gate disabled (touchid_gate=off)",
+        .map_or(bwx::biometric::Gate::Off, |c| c.biometric_gate);
+    if matches!(gate, bwx::biometric::Gate::Off) {
+        log::debug!("biometric: gate is off; skipping Keychain unlock");
+        return BiometricUnlockOutcome::Fallback(
+            "Touch ID gate disabled (biometric_gate=off)",
         );
     }
-    let Ok(blob) = bwx::touchid::blob::Blob::load() else {
-        log::debug!("touchid: no enrollment blob on disk");
-        return TouchIdUnlockOutcome::Fallback(
-            "no Touch ID enrollment (run `bwx touchid enroll`)",
+    let Ok(blob) = bwx::biometric::blob::Blob::load() else {
+        log::debug!("biometric: no enrollment blob on disk");
+        return BiometricUnlockOutcome::Fallback(
+            "no Touch ID enrollment (run `bwx biometric enroll`)",
         );
     };
     log::debug!(
-        "touchid: attempting Keychain load for label {label}",
+        "biometric: attempting Keychain load for label {label}",
         label = blob.keychain_label
     );
     let prompt = format!("Unlock the {} vault", bwx::dirs::profile());
     let seed =
-        match bwx::touchid::keychain::load(&blob.keychain_label, &prompt) {
+        match bwx::biometric::keychain::load(&blob.keychain_label, &prompt) {
             Ok(bytes) if bytes.data().len() == 64 => bytes,
             Ok(other) => {
                 log::warn!(
-                    "touchid: wrapper key has unexpected length: {}",
+                    "biometric: wrapper key has unexpected length: {}",
                     other.data().len()
                 );
-                return TouchIdUnlockOutcome::Fallback(
+                return BiometricUnlockOutcome::Fallback(
                     "Touch ID wrapper key corrupted; re-enroll",
                 );
             }
-            Err(bwx::touchid::keychain::Error::UserCancelled) => {
-                log::debug!("touchid: user cancelled Keychain prompt");
-                return TouchIdUnlockOutcome::Fallback("Touch ID cancelled");
+            Err(bwx::biometric::keychain::Error::UserCancelled) => {
+                log::debug!("biometric: user cancelled Keychain prompt");
+                return BiometricUnlockOutcome::Fallback("Touch ID cancelled");
             }
-            Err(bwx::touchid::keychain::Error::Invalidated) => {
+            Err(bwx::biometric::keychain::Error::Invalidated) => {
                 log::warn!(
-                    "touchid: biometric set changed; master password \
+                    "biometric: biometric set changed; master password \
                  required to re-enroll"
                 );
-                return TouchIdUnlockOutcome::Fallback(
-                    "biometric set changed — run `bwx touchid enroll` \
+                return BiometricUnlockOutcome::Fallback(
+                    "biometric set changed — run `bwx biometric enroll` \
                  after unlocking to re-bind",
                 );
             }
-            Err(bwx::touchid::keychain::Error::NotFound) => {
+            Err(bwx::biometric::keychain::Error::NotFound) => {
                 log::warn!(
-                    "touchid: enrollment blob present but Keychain item \
+                    "biometric: enrollment blob present but Keychain item \
                  missing; likely deleted outside bwx"
                 );
-                return TouchIdUnlockOutcome::Fallback(
+                return BiometricUnlockOutcome::Fallback(
                     "Touch ID Keychain item missing; re-enroll",
                 );
             }
             Err(e) => {
-                log::warn!("touchid: Keychain load failed: {e}");
-                return TouchIdUnlockOutcome::Fallback(
+                log::warn!("biometric: Keychain load failed: {e}");
+                return BiometricUnlockOutcome::Fallback(
                     "Touch ID unlock failed (see agent log)",
                 );
             }
         };
     let wrapper_keys =
-        bwx::touchid::blob::keys_from_wrapper_seed(seed.data());
+        bwx::biometric::blob::keys_from_wrapper_seed(seed.data());
 
     let Ok(cs) = bwx::cipherstring::CipherString::new(&blob.wrapped_priv_key)
     else {
-        log::warn!("touchid: wrapped priv_key cipherstring malformed");
-        return TouchIdUnlockOutcome::Fallback(
+        log::warn!("biometric: wrapped priv_key cipherstring malformed");
+        return BiometricUnlockOutcome::Fallback(
             "Touch ID blob corrupted; re-enroll",
         );
     };
     let Ok(priv_bytes) = cs.decrypt_locked_symmetric(&wrapper_keys) else {
-        log::warn!("touchid: priv_key unwrap failed");
-        return TouchIdUnlockOutcome::Fallback(
+        log::warn!("biometric: priv_key unwrap failed");
+        return BiometricUnlockOutcome::Fallback(
             "Touch ID blob decrypt failed; re-enroll",
         );
     };
@@ -766,14 +766,14 @@ async fn try_unlock_via_touchid(
     let mut org_keys = std::collections::HashMap::new();
     for (oid, wrapped) in &blob.wrapped_org_keys {
         let Ok(cs) = bwx::cipherstring::CipherString::new(wrapped) else {
-            log::warn!("touchid: wrapped org_key for {oid} malformed");
-            return TouchIdUnlockOutcome::Fallback(
+            log::warn!("biometric: wrapped org_key for {oid} malformed");
+            return BiometricUnlockOutcome::Fallback(
                 "Touch ID blob corrupted; re-enroll",
             );
         };
         let Ok(bytes) = cs.decrypt_locked_symmetric(&wrapper_keys) else {
-            log::warn!("touchid: org_key for {oid} unwrap failed");
-            return TouchIdUnlockOutcome::Fallback(
+            log::warn!("biometric: org_key for {oid} unwrap failed");
+            return BiometricUnlockOutcome::Fallback(
                 "Touch ID blob decrypt failed; re-enroll",
             );
         };
@@ -784,18 +784,18 @@ async fn try_unlock_via_touchid(
     s.priv_key = Some(priv_key);
     s.org_keys = Some(org_keys);
     log::debug!(
-        "touchid: vault unlocked via Keychain ({} org key(s))",
+        "biometric: vault unlocked via Keychain ({} org key(s))",
         blob.wrapped_org_keys.len()
     );
-    TouchIdUnlockOutcome::Unlocked
+    BiometricUnlockOutcome::Unlocked
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[allow(clippy::unused_async)]
-async fn try_unlock_via_touchid(
+async fn try_unlock_via_biometric(
     _state: std::sync::Arc<tokio::sync::Mutex<crate::state::State>>,
-) -> TouchIdUnlockOutcome {
-    TouchIdUnlockOutcome::Fallback("Touch ID not supported on this platform")
+) -> BiometricUnlockOutcome {
+    BiometricUnlockOutcome::Fallback("Touch ID not supported on this platform")
 }
 
 pub async fn lock(

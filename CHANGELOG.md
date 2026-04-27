@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+* **Breaking:** rename `touchid` module / config / subcommand to
+  `biometric`. Config key `touchid_gate` is now `biometric_gate`;
+  subcommand `bwx touchid …` is now `bwx biometric …`; env var
+  `BWX_TOUCHID_TEST_BYPASS` is now `BWX_BIOMETRIC_TEST_BYPASS`. No
+  alias — re-set config and re-enroll after upgrading.
+* **Breaking:** rename `setup-macos` / `teardown-macos` subcommands
+  to `setup-os` / `teardown-os`. macOS behavior is unchanged; on
+  non-macOS platforms the commands currently print a
+  not-implemented message. No alias.
+* Add Windows support: signed binaries (Azure Trusted Signing) and
+  MSI on the GitHub Release page; winget + scoop distribution. See
+  `SPIKE_WINDOWS.md` for design notes.
+
 ## [2.3.1] - 2026-04-27
 
 * **Fix `bwx touchid enroll` failing with `SecItemAdd: status -34018`

@@ -1,4 +1,4 @@
-use std::{io::Read as _, os::unix::ffi::OsStringExt as _};
+use std::io::Read as _;
 
 use crate::bin_error;
 
@@ -87,13 +87,9 @@ pub fn quit() -> bin_error::Result<()> {
             let pidfile = bwx::dirs::pid_file();
             let mut pid = String::new();
             std::fs::File::open(pidfile)?.read_to_string(&mut pid)?;
-            let Some(pid) =
-                rustix::process::Pid::from_raw(pid.trim_end().parse()?)
-            else {
-                return Err(bin_error::Error::msg(
-                    "failed to read pid from pidfile",
-                ));
-            };
+            let pid: u32 = pid.trim_end().parse().map_err(|_| {
+                bin_error::Error::msg("failed to read pid from pidfile")
+            })?;
             sock.send(&build_request(bwx::protocol::Action::Quit))?;
             wait_for_exit(pid);
             Ok(())
@@ -217,22 +213,23 @@ pub fn clipboard_store(text: &str) -> bin_error::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-pub fn touchid_enroll() -> bin_error::Result<()> {
-    simple_action(bwx::protocol::Action::TouchIdEnroll)
+pub fn biometric_enroll() -> bin_error::Result<()> {
+    simple_action(bwx::protocol::Action::BiometricEnroll)
 }
 
 #[cfg(target_os = "macos")]
-pub fn touchid_disable() -> bin_error::Result<()> {
-    simple_action(bwx::protocol::Action::TouchIdDisable)
+pub fn biometric_disable() -> bin_error::Result<()> {
+    simple_action(bwx::protocol::Action::BiometricDisable)
 }
 
 #[cfg(target_os = "macos")]
-pub fn touchid_status() -> bin_error::Result<(bool, String, Option<String>)> {
+pub fn biometric_status() -> bin_error::Result<(bool, String, Option<String>)>
+{
     let res = crate::sock::request(&build_request(
-        bwx::protocol::Action::TouchIdStatus,
+        bwx::protocol::Action::BiometricStatus,
     ))?;
     match res {
-        bwx::protocol::Response::TouchIdStatus {
+        bwx::protocol::Response::BiometricStatus {
             enrolled,
             gate,
             keychain_label,
@@ -273,7 +270,20 @@ fn simple_action(action: bwx::protocol::Action) -> bin_error::Result<()> {
     }
 }
 
-fn wait_for_exit(pid: rustix::process::Pid) {
+#[cfg(unix)]
+fn detect_tty() -> Option<std::ffi::OsString> {
+    use std::os::unix::ffi::OsStringExt as _;
+    rustix::termios::ttyname(std::io::stdin(), vec![])
+        .ok()
+        .map(|p| std::ffi::OsString::from_vec(p.into_bytes()))
+}
+
+#[cfg(windows)]
+fn detect_tty() -> Option<std::ffi::OsString> {
+    None
+}
+
+fn wait_for_exit(pid: u32) {
     // Bounded so an agent that ignores Quit (e.g. because it rejected
     // the connection on a code-requirement check) doesn't pin us
     // indefinitely. The CLI caller already has the error from the
@@ -282,19 +292,51 @@ fn wait_for_exit(pid: rustix::process::Pid) {
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(2);
     while std::time::Instant::now() < deadline {
-        if rustix::process::test_kill_process(pid).is_err() {
+        if !process_alive(pid) {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    let Some(p) = rustix::process::Pid::from_raw(
+        i32::try_from(pid).unwrap_or(0),
+    ) else {
+        return false;
+    };
+    rustix::process::test_kill_process(p).is_ok()
+}
+
+#[cfg(windows)]
+fn process_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: PROCESS_QUERY_LIMITED_INFORMATION is sufficient to read
+    // the exit code; pid is a u32 from the OS.
+    let h = unsafe {
+        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
+    };
+    if h.is_null() {
+        return false;
+    }
+    let mut code: u32 = 0;
+    // SAFETY: h is a valid process handle; code is a stack out.
+    let ok = unsafe { GetExitCodeProcess(h, &mut code) };
+    // SAFETY: h is closed exactly once.
+    unsafe {
+        CloseHandle(h);
+    }
+    #[allow(clippy::as_conversions)]
+    let still_active = STILL_ACTIVE as u32;
+    ok != 0 && code == still_active
+}
+
 fn get_environment() -> bwx::protocol::Environment {
-    let tty = std::env::var_os("BWX_TTY").or_else(|| {
-        rustix::termios::ttyname(std::io::stdin(), vec![])
-            .ok()
-            .map(|p| std::ffi::OsString::from_vec(p.as_bytes().to_vec()))
-    });
+    let tty = std::env::var_os("BWX_TTY").or_else(detect_tty);
 
     let env_vars = std::env::vars_os()
         .filter(|(var_name, _)| {

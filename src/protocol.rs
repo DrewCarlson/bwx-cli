@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 
 pub const VERSION: u32 = {
@@ -124,7 +125,15 @@ impl serde::Serialize for SerializableOsString {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&crate::base64::encode(self.0.as_bytes()))
+        // On Unix, use raw bytes (preserves invalid UTF-8 paths). On
+        // Windows, OsStrings are WTF-8 internally; round-tripping via
+        // `as_encoded_bytes` / `from_encoded_bytes_unchecked` is the
+        // documented stable mechanism.
+        #[cfg(unix)]
+        let bytes = self.0.as_bytes().to_vec();
+        #[cfg(windows)]
+        let bytes = self.0.as_encoded_bytes().to_vec();
+        serializer.serialize_str(&crate::base64::encode(&bytes))
     }
 }
 
@@ -149,11 +158,18 @@ impl<'de> serde::Deserialize<'de> for SerializableOsString {
             where
                 E: serde::de::Error,
             {
-                Ok(SerializableOsString(std::ffi::OsString::from_vec(
-                    crate::base64::decode(s).map_err(|_| {
-                        E::invalid_value(serde::de::Unexpected::Str(s), &self)
-                    })?,
-                )))
+                let bytes = crate::base64::decode(s).map_err(|_| {
+                    E::invalid_value(serde::de::Unexpected::Str(s), &self)
+                })?;
+                #[cfg(unix)]
+                let os = std::ffi::OsString::from_vec(bytes);
+                #[cfg(windows)]
+                // SAFETY: the bytes were produced by `as_encoded_bytes`
+                // on the encode side; this is the documented inverse.
+                let os = unsafe {
+                    std::ffi::OsString::from_encoded_bytes_unchecked(bytes)
+                };
+                Ok(SerializableOsString(os))
             }
         }
 
@@ -263,12 +279,12 @@ pub enum Action {
     Version,
     /// Enroll the currently-unlocked vault keys under a Touch ID-gated
     /// Keychain wrapper key. Requires the agent to already be unlocked.
-    TouchIdEnroll,
+    BiometricEnroll,
     /// Remove the Keychain wrapper key and the on-disk enrollment blob.
-    TouchIdDisable,
-    /// Report whether Touch ID enrollment is active and summarise the
-    /// current `touchid_gate` setting.
-    TouchIdStatus,
+    BiometricDisable,
+    /// Report whether biometric enrollment is active and summarise the
+    /// current `biometric_gate` setting.
+    BiometricStatus,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -293,7 +309,7 @@ pub enum Response {
     Version {
         version: u32,
     },
-    TouchIdStatus {
+    BiometricStatus {
         enrolled: bool,
         gate: String,
         keychain_label: Option<String>,

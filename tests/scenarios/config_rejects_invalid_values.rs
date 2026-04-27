@@ -1,5 +1,5 @@
 //! `bwx config set` must reject values its key-specific parser can't handle
-//! rather than silently coercing them. Covers `touchid_gate` and
+//! rather than silently coercing them. Covers `biometric_gate` and
 //! `ssh_confirm_sign`.
 
 use crate::common::{register_user, BwxHarness};
@@ -7,7 +7,7 @@ use crate::skip_if_no_vaultwarden;
 
 #[test]
 #[ignore = "requires vaultwarden binary; run with --ignored"]
-fn bad_touchid_gate_and_bool_rejected() {
+fn bad_biometric_gate_and_bool_rejected() {
     let server = skip_if_no_vaultwarden!();
     let email = "bad-config@example.test";
     let password = "correct horse battery staple";
@@ -15,14 +15,14 @@ fn bad_touchid_gate_and_bool_rejected() {
 
     let harness = BwxHarness::new(&server, email, password);
 
-    // --- unknown `touchid_gate` value ---
-    let out = harness.run(&["config", "set", "touchid_gate", "maybe"]);
+    // --- unknown `biometric_gate` value ---
+    let out = harness.run(&["config", "set", "biometric_gate", "maybe"]);
     assert!(
         !out.status.success(),
-        "bad touchid_gate accepted; stdout={}",
+        "bad biometric_gate accepted; stdout={}",
         String::from_utf8_lossy(&out.stdout),
     );
-    let gate_after = harness.check(&["config", "show", "touchid_gate"]);
+    let gate_after = harness.check(&["config", "show", "biometric_gate"]);
     assert_eq!(gate_after.trim(), "off");
 
     // --- non-bool `ssh_confirm_sign` ---

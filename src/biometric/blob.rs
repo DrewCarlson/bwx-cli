@@ -1,6 +1,6 @@
-//! On-disk wrapper blob for Touch ID-enrolled vault keys.
+//! On-disk wrapper blob for biometric-enrolled vault keys.
 //!
-//! Written by `bwx touchid enroll`, read by the agent on unlock. Holds
+//! Written by `bwx biometric enroll`, read by the agent on unlock. Holds
 //! `CipherString`-wrapped vault keys + the Keychain label of the wrapping
 //! key. The wrapping key itself never touches disk.
 #![allow(clippy::doc_markdown)]
@@ -8,7 +8,7 @@
 use crate::locked;
 use crate::prelude::Error as BwxError;
 
-const FILENAME: &str = "touchid.json";
+const FILENAME: &str = "biometric.json";
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct Blob {
@@ -45,7 +45,6 @@ impl Blob {
 
     pub fn save(&self) -> Result<(), BwxError> {
         use std::io::Write as _;
-        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
         let path = Self::path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|source| {
@@ -57,21 +56,28 @@ impl Blob {
         }
         let json = serde_json::to_string(self)
             .map_err(|source| BwxError::Json { source })?;
-        let mut fh = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .map_err(|source| BwxError::SaveConfig {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            opts.mode(0o600);
+        }
+        let mut fh = opts.open(&path).map_err(|source| {
+            BwxError::SaveConfig {
                 source,
                 file: path.clone(),
-            })?;
-        fh.set_permissions(std::fs::Permissions::from_mode(0o600))
-            .map_err(|source| BwxError::SaveConfig {
-                source,
-                file: path.clone(),
-            })?;
+            }
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fh.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .map_err(|source| BwxError::SaveConfig {
+                    source,
+                    file: path.clone(),
+                })?;
+        }
         fh.write_all(json.as_bytes())
             .map_err(|source| BwxError::SaveConfig { source, file: path })?;
         Ok(())

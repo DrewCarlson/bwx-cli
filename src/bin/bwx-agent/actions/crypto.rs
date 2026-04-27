@@ -1,4 +1,4 @@
-use super::auth::enforce_touchid_gate;
+use super::auth::enforce_biometric_gate;
 use super::sync::decrypt_cipher;
 use super::util::{respond_ack, respond_decrypt, respond_encrypt};
 use crate::bin_error::{self, ContextExt as _};
@@ -13,9 +13,9 @@ pub async fn decrypt(
     session_id: Option<&str>,
     purpose: Option<&str>,
 ) -> bin_error::Result<()> {
-    enforce_touchid_gate(
+    enforce_biometric_gate(
         state.clone(),
-        bwx::touchid::Kind::VaultSecret,
+        bwx::biometric::Kind::VaultSecret,
         session_id,
         purpose,
     )
@@ -52,9 +52,9 @@ pub async fn decrypt_batch(
         return Ok(());
     }
 
-    enforce_touchid_gate(
+    enforce_biometric_gate(
         state.clone(),
-        bwx::touchid::Kind::VaultSecret,
+        bwx::biometric::Kind::VaultSecret,
         session_id,
         purpose,
     )
@@ -110,9 +110,9 @@ pub async fn encrypt(
     session_id: Option<&str>,
     purpose: Option<&str>,
 ) -> bin_error::Result<()> {
-    enforce_touchid_gate(
+    enforce_biometric_gate(
         state.clone(),
-        bwx::touchid::Kind::VaultSecret,
+        bwx::biometric::Kind::VaultSecret,
         session_id,
         purpose,
     )
@@ -152,9 +152,9 @@ pub async fn encrypt_batch(
         return Ok(());
     }
 
-    enforce_touchid_gate(
+    enforce_biometric_gate(
         state.clone(),
-        bwx::touchid::Kind::VaultSecret,
+        bwx::biometric::Kind::VaultSecret,
         session_id,
         purpose,
     )
@@ -205,9 +205,9 @@ pub async fn clipboard_store(
     session_id: Option<&str>,
     purpose: Option<&str>,
 ) -> bin_error::Result<()> {
-    enforce_touchid_gate(
+    enforce_biometric_gate(
         state.clone(),
-        bwx::touchid::Kind::VaultSecret,
+        bwx::biometric::Kind::VaultSecret,
         session_id,
         purpose,
     )

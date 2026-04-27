@@ -237,6 +237,7 @@ impl Db {
 
     // XXX need to make this atomic
     pub fn save(&self, server: &str, email: &str) -> Result<()> {
+        #[cfg(unix)]
         use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
         let file = crate::dirs::db_file(server, email);
         // unwrap is safe here because Self::filename is explicitly
@@ -247,16 +248,16 @@ impl Db {
                 file: file.clone(),
             },
         )?;
-        let mut fh = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&file)
-            .map_err(|source| Error::SaveDb {
-                source,
-                file: file.clone(),
-            })?;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        opts.mode(0o600);
+        let mut fh = opts.open(&file).map_err(|source| Error::SaveDb {
+            source,
+            file: file.clone(),
+        })?;
+        // Windows isolation comes from the parent dir's per-user DACL.
+        #[cfg(unix)]
         fh.set_permissions(std::fs::Permissions::from_mode(0o600))
             .map_err(|source| Error::SaveDb {
                 source,
@@ -276,6 +277,7 @@ impl Db {
 
     // XXX need to make this atomic
     pub async fn save_async(&self, server: &str, email: &str) -> Result<()> {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt as _;
         let file = crate::dirs::db_file(server, email);
         // unwrap is safe here because Self::filename is explicitly
@@ -286,17 +288,17 @@ impl Db {
                 source,
                 file: file.clone(),
             })?;
-        let mut fh = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&file)
-            .await
-            .map_err(|source| Error::SaveDbAsync {
+        let mut opts = tokio::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        opts.mode(0o600);
+        let mut fh =
+            opts.open(&file).await.map_err(|source| Error::SaveDbAsync {
                 source,
                 file: file.clone(),
             })?;
+        // Windows isolation comes from the parent dir's per-user DACL.
+        #[cfg(unix)]
         fh.set_permissions(std::fs::Permissions::from_mode(0o600))
             .await
             .map_err(|source| Error::SaveDbAsync {

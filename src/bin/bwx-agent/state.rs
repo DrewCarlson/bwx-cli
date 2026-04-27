@@ -1,9 +1,9 @@
 use sha2::Digest as _;
 
-/// How long a Touch ID authorization remains valid for a given session
+/// How long a biometric authorization remains valid for a given session
 /// before the agent prompts again. Bumped on every access, so the window
 /// is idle time, not a hard upper bound on total command duration.
-const TOUCHID_SESSION_TTL: std::time::Duration =
+const BIOMETRIC_SESSION_TTL: std::time::Duration =
     std::time::Duration::from_secs(60);
 
 pub struct State {
@@ -18,11 +18,11 @@ pub struct State {
     pub master_password_reprompt: std::collections::HashSet<[u8; 32]>,
     pub master_password_reprompt_initialized: bool,
 
-    /// Session tokens that have cleared a Touch ID prompt, mapped to the
-    /// last time activity was seen on that session. Bumped on every
+    /// Session tokens that have cleared a biometric prompt, mapped to
+    /// the last time activity was seen on that session. Bumped on every
     /// authorized access so a long-running command doesn't time out
     /// mid-execution. Cleared on `Lock`.
-    pub touchid_sessions:
+    pub biometric_sessions:
         std::collections::HashMap<String, std::time::Instant>,
 
     // stored here for the ssh agent, because requests made to the ssh
@@ -59,31 +59,31 @@ impl State {
         self.priv_key = None;
         self.org_keys = None;
         self.timeout.clear();
-        self.clear_touchid_sessions();
+        self.clear_biometric_sessions();
     }
 
     /// True if `session_id` has been recorded within
-    /// `TOUCHID_SESSION_TTL`; such sessions may skip the biometric
+    /// `BIOMETRIC_SESSION_TTL`; such sessions may skip the biometric
     /// prompt on subsequent requests within the same `bwx <command>`.
-    pub fn touchid_session_is_fresh(&self, session_id: &str) -> bool {
-        self.touchid_sessions
+    pub fn biometric_session_is_fresh(&self, session_id: &str) -> bool {
+        self.biometric_sessions
             .get(session_id)
-            .is_some_and(|ts| ts.elapsed() < TOUCHID_SESSION_TTL)
+            .is_some_and(|ts| ts.elapsed() < BIOMETRIC_SESSION_TTL)
     }
 
-    pub fn record_touchid_session(&mut self, session_id: &str) {
-        self.touchid_sessions
+    pub fn record_biometric_session(&mut self, session_id: &str) {
+        self.biometric_sessions
             .insert(session_id.to_string(), std::time::Instant::now());
-        self.prune_touchid_sessions();
+        self.prune_biometric_sessions();
     }
 
-    pub fn clear_touchid_sessions(&mut self) {
-        self.touchid_sessions.clear();
+    pub fn clear_biometric_sessions(&mut self) {
+        self.biometric_sessions.clear();
     }
 
-    fn prune_touchid_sessions(&mut self) {
-        self.touchid_sessions
-            .retain(|_, ts| ts.elapsed() < TOUCHID_SESSION_TTL);
+    fn prune_biometric_sessions(&mut self) {
+        self.biometric_sessions
+            .retain(|_, ts| ts.elapsed() < BIOMETRIC_SESSION_TTL);
     }
 
     pub fn set_sync_timeout(&self) {

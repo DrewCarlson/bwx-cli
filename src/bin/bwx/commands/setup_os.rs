@@ -1,16 +1,49 @@
 use crate::bin_error;
 
-pub fn setup_macos(force: bool) -> bin_error::Result<()> {
+#[cfg(target_os = "macos")]
+pub fn setup_os(force: bool) -> bin_error::Result<()> {
     do_setup_macos(force)
 }
 
-pub fn teardown_macos() -> bin_error::Result<()> {
+#[cfg(target_os = "macos")]
+pub fn teardown_os() -> bin_error::Result<()> {
     do_teardown_macos()
 }
 
+#[cfg(target_os = "windows")]
+pub fn setup_os(force: bool) -> bin_error::Result<()> {
+    do_setup_windows(force)
+}
+
+#[cfg(target_os = "windows")]
+pub fn teardown_os() -> bin_error::Result<()> {
+    do_teardown_windows()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn setup_os(_force: bool) -> bin_error::Result<()> {
+    println!(
+        "per-platform setup is not implemented for {} yet",
+        std::env::consts::OS
+    );
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn teardown_os() -> bin_error::Result<()> {
+    println!(
+        "per-platform teardown is not implemented for {} yet",
+        std::env::consts::OS
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 const LAUNCHAGENT_LABEL: &str = "drews.website.bwx.ssh-auth-sock";
+#[cfg(target_os = "macos")]
 const AGENT_LAUNCHAGENT_LABEL: &str = "drews.website.bwx.agent";
 
+#[cfg(target_os = "macos")]
 fn do_setup_macos(force: bool) -> bin_error::Result<()> {
     let home = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
@@ -52,7 +85,7 @@ fn do_setup_macos(force: bool) -> bin_error::Result<()> {
 
     let helper_body = format!(
         "#!/bin/sh\n\
-         # Managed by `bwx setup-macos`. Edit the bwx binary path if \
+         # Managed by `bwx setup-os`. Edit the bwx binary path if \
          you move it.\n\
          exec /bin/launchctl setenv SSH_AUTH_SOCK \"$({bwx} ssh-socket)\"\n",
         bwx = bwx_bin.display(),
@@ -181,6 +214,7 @@ fn do_setup_macos(force: bool) -> bin_error::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn do_teardown_macos() -> bin_error::Result<()> {
     let home = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
@@ -222,7 +256,7 @@ fn do_teardown_macos() -> bin_error::Result<()> {
         }
     }
     if removed.is_empty() {
-        println!("nothing to remove — `bwx setup-macos` wasn't active");
+        println!("nothing to remove — `bwx setup-os` wasn't active");
     } else {
         println!("removed:");
         for p in removed {
@@ -230,4 +264,235 @@ fn do_teardown_macos() -> bin_error::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+const WINDOWS_TASK_NAME: &str = "bwx-agent-autostart";
+
+#[cfg(target_os = "windows")]
+fn windows_ssh_pipe_name() -> String {
+    match std::env::var("BWX_PROFILE") {
+        Ok(p) if !p.is_empty() => {
+            format!(r"\\.\pipe\openssh-ssh-agent-{p}")
+        }
+        _ => r"\\.\pipe\openssh-ssh-agent".to_string(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+use bwx::win::wide::str_to_utf16_nul as to_utf16_nul;
+
+#[cfg(target_os = "windows")]
+fn do_setup_windows(_force: bool) -> bin_error::Result<()> {
+    // `--force` is honored automatically: schtasks /F overwrites the
+    // task, and the registry write is idempotent.
+    let bwx_bin = std::env::current_exe()
+        .map_err(|e| bin_error::Error::msg(format!("current_exe: {e}")))?;
+    let agent_bin = bwx_bin
+        .parent()
+        .map(|d| d.join("bwx-agent.exe"))
+        .ok_or_else(|| {
+            bin_error::Error::msg("couldn't resolve bwx-agent.exe path")
+        })?;
+
+    let action = format!("{} --no-daemonize", agent_bin.display());
+    let output = std::process::Command::new("schtasks.exe")
+        .args([
+            "/Create",
+            "/TN",
+            WINDOWS_TASK_NAME,
+            "/SC",
+            "ONLOGON",
+            "/TR",
+            &action,
+            "/F",
+            "/RL",
+            "LIMITED",
+        ])
+        .output()
+        .map_err(|e| bin_error::Error::msg(format!("schtasks.exe: {e}")))?;
+    if !output.status.success() {
+        return Err(bin_error::Error::msg(format!(
+            "schtasks /Create exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+
+    let pipe = windows_ssh_pipe_name();
+    write_user_env_var("SSH_AUTH_SOCK", &pipe)?;
+    broadcast_environment_change();
+
+    println!("Registered Scheduled Task:");
+    println!("  Name:   {WINDOWS_TASK_NAME}");
+    println!("  Action: {action}");
+    println!("Set user environment variable:");
+    println!("  SSH_AUTH_SOCK={pipe}");
+    println!();
+    println!(
+        "The Scheduled Task starts bwx-agent at next logon. For the \
+         current session, run `bwx-agent` manually, or log out and back \
+         in. Already-running processes won't see SSH_AUTH_SOCK until \
+         they are restarted."
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn do_teardown_windows() -> bin_error::Result<()> {
+    let mut removed: Vec<String> = Vec::new();
+
+    let output = std::process::Command::new("schtasks.exe")
+        .args(["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"])
+        .output()
+        .map_err(|e| bin_error::Error::msg(format!("schtasks.exe: {e}")))?;
+    if output.status.success() {
+        removed.push(format!("Scheduled Task: {WINDOWS_TASK_NAME}"));
+    } else {
+        // Non-zero is expected when the task doesn't exist; surface
+        // anything else to the user but don't abort teardown.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.contains("cannot find") && !stderr.contains("does not exist")
+        {
+            eprintln!("schtasks /Delete: {}", stderr.trim());
+        }
+    }
+
+    match delete_user_env_var("SSH_AUTH_SOCK") {
+        Ok(true) => removed.push("user env var: SSH_AUTH_SOCK".to_string()),
+        Ok(false) => {}
+        Err(e) => return Err(e),
+    }
+    broadcast_environment_change();
+
+    if removed.is_empty() {
+        println!("nothing to remove — `bwx setup-os` wasn't active");
+    } else {
+        println!("removed:");
+        for p in removed {
+            println!("  {p}");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn write_user_env_var(name: &str, value: &str) -> bin_error::Result<()> {
+    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, GetLastError};
+    use windows_sys::Win32::System::Registry::{
+        HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_EXPAND_SZ, RegCloseKey,
+        RegOpenKeyExW, RegSetValueExW,
+    };
+
+    let subkey = to_utf16_nul("Environment");
+    let name_w = to_utf16_nul(name);
+    let value_w: Vec<u16> = to_utf16_nul(value);
+
+    let mut hkey: HKEY = std::ptr::null_mut();
+    // SAFETY: subkey is a NUL-terminated UTF-16 string; hkey out-param.
+    let rc = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            0,
+            KEY_SET_VALUE,
+            &mut hkey,
+        )
+    };
+    if rc != ERROR_SUCCESS {
+        return Err(bin_error::Error::msg(format!(
+            "RegOpenKeyExW(Environment) failed: error {rc}"
+        )));
+    }
+
+    let byte_len = value_w
+        .len()
+        .checked_mul(std::mem::size_of::<u16>())
+        .and_then(|n| u32::try_from(n).ok())
+        .ok_or_else(|| bin_error::Error::msg("env var too long"))?;
+    // SAFETY: hkey valid; name_w NUL-terminated; data points at byte_len bytes.
+    let rc = unsafe {
+        RegSetValueExW(
+            hkey,
+            name_w.as_ptr(),
+            0,
+            REG_EXPAND_SZ,
+            value_w.as_ptr().cast::<u8>(),
+            byte_len,
+        )
+    };
+    // SAFETY: hkey opened above.
+    unsafe { RegCloseKey(hkey) };
+    if rc != ERROR_SUCCESS {
+        // SAFETY: GetLastError reads thread-local error state.
+        let code = unsafe { GetLastError() };
+        return Err(bin_error::Error::msg(format!(
+            "RegSetValueExW({name}) failed: error {rc} (last_error {code})"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn delete_user_env_var(name: &str) -> bin_error::Result<bool> {
+    use windows_sys::Win32::Foundation::{
+        ERROR_FILE_NOT_FOUND, ERROR_SUCCESS,
+    };
+    use windows_sys::Win32::System::Registry::{
+        HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, RegCloseKey, RegDeleteValueW,
+        RegOpenKeyExW,
+    };
+
+    let subkey = to_utf16_nul("Environment");
+    let name_w = to_utf16_nul(name);
+
+    let mut hkey: HKEY = std::ptr::null_mut();
+    // SAFETY: subkey is NUL-terminated UTF-16; hkey out-param.
+    let rc = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            0,
+            KEY_SET_VALUE,
+            &mut hkey,
+        )
+    };
+    if rc != ERROR_SUCCESS {
+        return Err(bin_error::Error::msg(format!(
+            "RegOpenKeyExW(Environment) failed: error {rc}"
+        )));
+    }
+    // SAFETY: hkey valid; name_w NUL-terminated.
+    let rc = unsafe { RegDeleteValueW(hkey, name_w.as_ptr()) };
+    // SAFETY: hkey opened above.
+    unsafe { RegCloseKey(hkey) };
+    match rc {
+        ERROR_SUCCESS => Ok(true),
+        ERROR_FILE_NOT_FOUND => Ok(false),
+        other => Err(bin_error::Error::msg(format!(
+            "RegDeleteValueW({name}) failed: error {other}"
+        ))),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn broadcast_environment_change() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        HWND_BROADCAST, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_SETTINGCHANGE,
+    };
+
+    let param = to_utf16_nul("Environment");
+    let mut result: usize = 0;
+    // SAFETY: HWND_BROADCAST + WM_SETTINGCHANGE; lParam is NUL-terminated UTF-16.
+    unsafe {
+        SendMessageTimeoutW(
+            HWND_BROADCAST,
+            WM_SETTINGCHANGE,
+            0,
+            param.as_ptr() as isize,
+            SMTO_ABORTIFHUNG,
+            5000,
+            &mut result,
+        );
+    }
 }

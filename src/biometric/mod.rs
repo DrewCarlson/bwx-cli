@@ -5,7 +5,7 @@
 //! stub that always returns `Ok(true)`, so callers need no cfg gating.
 
 pub mod blob;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub mod keychain;
 
 use std::fmt;
@@ -32,7 +32,7 @@ impl FromStr for Gate {
             "signing" => Ok(Self::Signing),
             "all" | "true" => Ok(Self::All),
             other => Err(format!(
-                "invalid touchid_gate value {other:?} (expected \
+                "invalid biometric_gate value {other:?} (expected \
                  off/signing/all)"
             )),
         }
@@ -80,7 +80,12 @@ pub async fn require_presence(reason: &str) -> Result<bool, Error> {
     macos::require_presence(reason).await
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub async fn require_presence(reason: &str) -> Result<bool, Error> {
+    windows_uc::require_presence(reason).await
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[allow(clippy::unused_async)]
 pub async fn require_presence(_reason: &str) -> Result<bool, Error> {
     Ok(true)
@@ -118,14 +123,14 @@ mod macos {
 
     use super::Error;
 
-    /// Test bypass for e2e scenarios. If `BWX_TOUCHID_TEST_BYPASS` is
+    /// Test bypass for e2e scenarios. If `BWX_BIOMETRIC_TEST_BYPASS` is
     /// "allow"/"deny" AND debug assertions are enabled, the FFI call is
     /// skipped. Ignored in release builds.
     fn debug_bypass() -> Option<bool> {
         if !cfg!(debug_assertions) {
             return None;
         }
-        match std::env::var("BWX_TOUCHID_TEST_BYPASS").ok().as_deref() {
+        match std::env::var("BWX_BIOMETRIC_TEST_BYPASS").ok().as_deref() {
             Some("allow") => Some(true),
             Some("deny") => Some(false),
             _ => None,
@@ -191,6 +196,51 @@ mod macos {
         }
         let rx = begin_presence_check(reason)?;
         rx.await.map_err(|_| Error::Os("reply dropped".into()))?
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod windows_uc {
+    use windows::Security::Credentials::UI::{
+        UserConsentVerificationResult, UserConsentVerifier,
+        UserConsentVerifierAvailability,
+    };
+    use windows::core::HSTRING;
+
+    use super::Error;
+
+    pub async fn require_presence(reason: &str) -> Result<bool, Error> {
+        let reason = reason.to_owned();
+        // Mirror the macOS path: hop the blocking WinRT calls onto a
+        // worker thread so the agent's async runtime keeps running.
+        tokio::task::spawn_blocking(move || run(&reason))
+            .await
+            .map_err(|e| Error::Os(format!("spawn_blocking: {e}")))?
+    }
+
+    fn run(reason: &str) -> Result<bool, Error> {
+        let availability = UserConsentVerifier::CheckAvailabilityAsync()
+            .map_err(|e| Error::Os(format!("CheckAvailability: {e}")))?
+            .join()
+            .map_err(|e| Error::Os(format!("CheckAvailability join: {e}")))?;
+        if availability != UserConsentVerifierAvailability::Available {
+            return Err(Error::Unavailable(format!(
+                "UserConsentVerifierAvailability = {availability:?}"
+            )));
+        }
+        let result = UserConsentVerifier::RequestVerificationAsync(
+            &HSTRING::from(reason),
+        )
+        .map_err(|e| Error::Os(format!("RequestVerification: {e}")))?
+        .join()
+        .map_err(|e| Error::Os(format!("RequestVerification join: {e}")))?;
+        match result {
+            UserConsentVerificationResult::Verified => Ok(true),
+            UserConsentVerificationResult::Canceled => Ok(false),
+            other => Err(Error::Os(format!(
+                "UserConsentVerificationResult = {other:?}"
+            ))),
+        }
     }
 }
 

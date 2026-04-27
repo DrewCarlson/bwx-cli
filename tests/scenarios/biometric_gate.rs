@@ -1,5 +1,5 @@
-//! Exercise the Touch ID gate. In debug builds `bwx::touchid` honours
-//! `BWX_TOUCHID_TEST_BYPASS=allow|deny` and skips the real `LAContext` FFI,
+//! Exercise the biometric gate. In debug builds `bwx::biometric` honours
+//! `BWX_BIOMETRIC_TEST_BYPASS=allow|deny` and skips the real `LAContext` FFI,
 //! letting CI assert gate semantics without Touch ID hardware. macOS only.
 
 #![cfg(target_os = "macos")]
@@ -9,7 +9,7 @@ use crate::skip_if_no_vaultwarden;
 
 #[test]
 #[ignore = "requires vaultwarden binary; run with --ignored"]
-fn gate_off_skips_touchid() {
+fn gate_off_skips_biometric() {
     let server = skip_if_no_vaultwarden!();
     let email = "tid_off@example.test";
     let password = "correct horse battery staple";
@@ -29,7 +29,7 @@ fn gate_off_skips_touchid() {
     // path wasn't consulted.
     let out = harness
         .cmd()
-        .env("BWX_TOUCHID_TEST_BYPASS", "deny")
+        .env("BWX_BIOMETRIC_TEST_BYPASS", "deny")
         .args(["get", "e1"])
         .output()
         .expect("spawn");
@@ -60,11 +60,11 @@ fn gate_all_bypass_allow_succeeds() {
 
     // The bypass env must reach the *agent* (where the gate runs); the
     // CLI inherits the env and respawns the agent on next invocation.
-    harness.check(&["config", "set", "touchid_gate", "all"]);
+    harness.check(&["config", "set", "biometric_gate", "all"]);
 
     let out = harness
         .cmd()
-        .env("BWX_TOUCHID_TEST_BYPASS", "allow")
+        .env("BWX_BIOMETRIC_TEST_BYPASS", "allow")
         .args(["get", "e1"])
         .output()
         .expect("spawn");
@@ -92,11 +92,11 @@ fn gate_all_bypass_deny_blocks() {
         .success()
         .then_some(())
         .expect("add");
-    harness.check(&["config", "set", "touchid_gate", "all"]);
+    harness.check(&["config", "set", "biometric_gate", "all"]);
 
     let out = harness
         .cmd()
-        .env("BWX_TOUCHID_TEST_BYPASS", "deny")
+        .env("BWX_BIOMETRIC_TEST_BYPASS", "deny")
         .args(["get", "e1"])
         .output()
         .expect("spawn");
@@ -127,13 +127,13 @@ fn gate_signing_spares_vault_reads() {
         .success()
         .then_some(())
         .expect("add");
-    harness.check(&["config", "set", "touchid_gate", "signing"]);
+    harness.check(&["config", "set", "biometric_gate", "signing"]);
 
     // gate=signing excludes VaultSecret from the gate; bypass=deny must
     // still let `get` succeed.
     let out = harness
         .cmd()
-        .env("BWX_TOUCHID_TEST_BYPASS", "deny")
+        .env("BWX_BIOMETRIC_TEST_BYPASS", "deny")
         .args(["get", "e1"])
         .output()
         .expect("spawn");

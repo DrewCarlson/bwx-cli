@@ -15,6 +15,7 @@ impl SshAgent {
         Self { state }
     }
 
+    #[cfg(unix)]
     pub async fn run(self) -> crate::bin_error::Result<()> {
         let socket = bwx::dirs::ssh_agent_socket_file();
         let listener = crate::sock::bind_atomic(&socket)?;
@@ -22,6 +23,16 @@ impl SshAgent {
             .await
             .map_err(|e| crate::bin_error::Error::Boxed(Box::new(e)))?;
 
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    pub async fn run(self) -> crate::bin_error::Result<()> {
+        let pipe = bwx::dirs::ssh_agent_pipe_name();
+        let listener = OwnerFilteredPipeListener::bind(&pipe)?;
+        ssh_agent_lib::agent::listen(listener, self)
+            .await
+            .map_err(|e| crate::bin_error::Error::Boxed(Box::new(e)))?;
         Ok(())
     }
 }
@@ -40,6 +51,7 @@ pub struct SshSession {
 // ssh-agent-lib only covers the concrete `UnixListener` type, so it has
 // to be restated here for the filtered wrapper — otherwise `listen`
 // can't resolve a session factory.
+#[cfg(unix)]
 impl ssh_agent_lib::agent::Agent<UidFilteredUnixListener> for SshAgent {
     fn new_session(
         &mut self,
@@ -58,6 +70,7 @@ impl ssh_agent_lib::agent::Agent<UidFilteredUnixListener> for SshAgent {
 /// Build a "`<program>` (pid `<pid>`)" description of the peer on a
 /// connected Unix-socket fd. Best-effort: substitutes an "unknown"
 /// placeholder if any lookup fails.
+#[cfg(unix)]
 fn describe_peer(fd: std::os::unix::io::RawFd) -> String {
     let Some(pid) = crate::sock::peer_pid(fd) else {
         return "unknown client".to_string();
@@ -110,18 +123,23 @@ fn peer_program_name(pid: i32) -> Option<String> {
     )
 }
 
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "android",
-    target_os = "macos"
-)))]
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos"
+    ))
+))]
 fn peer_program_name(_pid: i32) -> Option<String> {
     None
 }
 
+#[cfg(unix)]
 #[derive(Debug)]
 struct UidFilteredUnixListener(tokio::net::UnixListener);
 
+#[cfg(unix)]
 #[ssh_agent_lib::async_trait]
 impl ssh_agent_lib::agent::ListeningSocket for UidFilteredUnixListener {
     type Stream = tokio::net::UnixStream;
@@ -136,6 +154,112 @@ impl ssh_agent_lib::agent::ListeningSocket for UidFilteredUnixListener {
             }
         }
     }
+}
+
+#[cfg(windows)]
+#[derive(Debug)]
+struct OwnerFilteredPipeListener {
+    server: tokio::net::windows::named_pipe::NamedPipeServer,
+    name: String,
+}
+
+#[cfg(windows)]
+impl OwnerFilteredPipeListener {
+    fn bind(name: &str) -> crate::bin_error::Result<Self> {
+        use crate::bin_error::ContextExt as _;
+        let server = crate::sock::create_pipe_instance_for_ssh(name, true)
+            .context("failed to create initial ssh-agent pipe instance")?;
+        Ok(Self {
+            server,
+            name: name.to_string(),
+        })
+    }
+}
+
+#[cfg(windows)]
+#[ssh_agent_lib::async_trait]
+impl ssh_agent_lib::agent::ListeningSocket for OwnerFilteredPipeListener {
+    type Stream = tokio::net::windows::named_pipe::NamedPipeServer;
+    async fn accept(&mut self) -> std::io::Result<Self::Stream> {
+        loop {
+            self.server.connect().await?;
+            let next =
+                crate::sock::create_pipe_instance_for_ssh(&self.name, false)?;
+            let stream = std::mem::replace(&mut self.server, next);
+            match crate::sock::check_peer_uid(&stream) {
+                Ok(()) => return Ok(stream),
+                Err(e) => {
+                    log::warn!("ssh-agent: rejecting connection: {e:#}");
+                }
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+impl ssh_agent_lib::agent::Agent<OwnerFilteredPipeListener> for SshAgent {
+    fn new_session(
+        &mut self,
+        socket: &tokio::net::windows::named_pipe::NamedPipeServer,
+    ) -> impl ssh_agent_lib::agent::Session {
+        use std::os::windows::io::AsRawHandle as _;
+        let peer = describe_peer_handle(socket.as_raw_handle());
+        log::debug!("ssh-agent: accepted connection from {peer}");
+        SshSession {
+            state: self.state.clone(),
+            peer,
+        }
+    }
+}
+
+#[cfg(windows)]
+fn describe_peer_handle(
+    handle: std::os::windows::io::RawHandle,
+) -> String {
+    let Some(pid) = crate::sock::peer_pid(handle) else {
+        return "unknown client".to_string();
+    };
+    let name = peer_program_name_win(pid)
+        .unwrap_or_else(|| "<unknown>".into());
+    format!("{name} (pid {pid})")
+}
+
+#[cfg(windows)]
+fn peer_program_name_win(pid: i32) -> Option<String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, MAX_PATH};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    let pid_u = u32::try_from(pid).ok()?;
+    // SAFETY: PROCESS_QUERY_LIMITED_INFORMATION is sufficient for
+    // QueryFullProcessImageNameW; pid is a u32 from the OS.
+    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid_u) };
+    if h.is_null() {
+        return None;
+    }
+    #[allow(clippy::as_conversions)]
+    const BUF: usize = MAX_PATH as usize;
+    let mut buf = [0u16; BUF];
+    let mut size = u32::try_from(buf.len()).expect("MAX_PATH fits in u32");
+    // SAFETY: h is a valid process handle; buf is sized via size in/out.
+    let ok = unsafe {
+        QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut size)
+    };
+    // SAFETY: h is closed exactly once.
+    unsafe {
+        CloseHandle(h);
+    }
+    if ok == 0 || size == 0 {
+        return None;
+    }
+    use std::os::windows::ffi::OsStringExt as _;
+    let path = std::ffi::OsString::from_wide(&buf[..size as usize]);
+    std::path::PathBuf::from(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(str::to_string)
 }
 
 #[ssh_agent_lib::async_trait]
@@ -184,11 +308,11 @@ impl ssh_agent_lib::agent::Session for SshSession {
         .map_err(|e| ssh_agent_lib::error::AgentError::Other(e.into()))?;
 
         let gate = bwx::config::Config::load()
-            .map_or(bwx::touchid::Gate::Off, |c| c.touchid_gate);
-        let touchid_gated_this_sign =
-            bwx::touchid::gate_applies(gate, bwx::touchid::Kind::SshSign);
-        if touchid_gated_this_sign {
-            let ok = bwx::touchid::require_presence(&format!(
+            .map_or(bwx::biometric::Gate::Off, |c| c.biometric_gate);
+        let biometric_gated_this_sign =
+            bwx::biometric::gate_applies(gate, bwx::biometric::Kind::SshSign);
+        if biometric_gated_this_sign {
+            let ok = bwx::biometric::require_presence(&format!(
                 "{peer} wants to sign with SSH key {name:?}",
                 peer = self.peer,
                 name = located.name,
@@ -202,9 +326,9 @@ impl ssh_agent_lib::agent::Session for SshSession {
             }
         }
 
-        // Optional confirm-on-sign via pinentry. Skipped when the Touch
-        // ID gate already prompted for this sign — the biometric tap is
-        // the confirmation, and pinentry isn't guaranteed to be
+        // Optional confirm-on-sign via pinentry. Skipped when the
+        // biometric gate already prompted for this sign — the biometric
+        // tap is the confirmation, and pinentry isn't guaranteed to be
         // installed on macOS.
         let (confirm_required, pinentry, environment) = {
             let state = self.state.lock().await;
@@ -212,7 +336,7 @@ impl ssh_agent_lib::agent::Session for SshSession {
                 ssh_agent_lib::error::AgentError::Other(e.into())
             })?;
             (
-                config.ssh_confirm_sign && !touchid_gated_this_sign,
+                config.ssh_confirm_sign && !biometric_gated_this_sign,
                 config.pinentry,
                 state.last_environment().clone(),
             )

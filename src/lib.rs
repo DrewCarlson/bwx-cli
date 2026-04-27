@@ -17,6 +17,8 @@ mod prelude;
 pub mod protocol;
 pub mod pwgen;
 pub mod totp;
-pub mod touchid;
+pub mod biometric;
 pub mod uuid;
+#[cfg(windows)]
+pub mod win;
 pub mod wordlist;

@@ -28,7 +28,7 @@ pub mod ssh_confirm_sign;
 pub mod ssh_public_key;
 pub mod ssh_sshsig_spike;
 pub mod totp_code;
-pub mod touchid_gate;
+pub mod biometric_gate;
 pub mod unicode_roundtrip;
 pub mod uri_matching;
 pub mod wrong_password;

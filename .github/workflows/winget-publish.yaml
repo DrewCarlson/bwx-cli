@@ -1,0 +1,76 @@
+name: winget-publish
+
+# Triggered after `release.yaml` finishes successfully on a tag push.
+# Submits a manifest PR against `microsoft/winget-pkgs` for the new
+# version. Pulls the standalone `.zip` from the GitHub Release; the
+# MSI sits on the Release page for users who want a guided install
+# but isn't the winget channel.
+#
+# Stable-only — same `vMAJOR.MINOR.PATCH` gate as `aur-publish.yaml`.
+
+on:
+  workflow_run:
+    workflows: ["release"]
+    types: [completed]
+  # Manual trigger so a botched submission can be re-driven without
+  # cutting another tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to submit (e.g. v2.4.0). Leave blank for latest.'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    # Runs on every manual dispatch, and on workflow_run only when
+    # the upstream `release` job succeeded for a `v*` tag.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: windows-latest   # winget-releaser drives PowerShell
+    steps:
+      - name: Resolve tag + version
+        id: ver
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+            if [ -z "$tag" ]; then
+              tag=$(gh release view --repo "${{ github.repository }}" \
+                      --json tagName -q .tagName)
+              echo "::notice::manual run, no tag input — defaulting to latest release $tag"
+            fi
+          else
+            tag="${{ github.event.workflow_run.head_branch }}"
+          fi
+          ver="${tag#v}"
+          # winget-pkgs only carries stable releases — drop prerelease
+          # tags the same way `aur-publish.yaml` does.
+          if [ "$ver" != "${ver%%-*}" ]; then
+            echo "::notice::skipping prerelease tag $tag"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Submit winget manifest PR
+        if: steps.ver.outputs.skip != '1'
+        uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
+        with:
+          identifier: drewcarlson.bwx-cli
+          version: ${{ steps.ver.outputs.ver }}
+          # Match the standalone Windows zip produced by
+          # `release.yaml`'s "Stage standalone zip (Windows)" step.
+          # Filename pattern: bwx-cli-<ver>-x86_64-pc-windows-msvc.zip
+          installers-regex: '-x86_64-pc-windows-msvc\.zip$'
+          # PAT with `public_repo` scope on a fork of microsoft/winget-pkgs.
+          token: ${{ secrets.WINGET_PAT }}

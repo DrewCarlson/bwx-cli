@@ -43,7 +43,7 @@ async fn tokio_main(
             notifications_handler,
             master_password_reprompt: std::collections::HashSet::new(),
             master_password_reprompt_initialized: false,
-            touchid_sessions: std::collections::HashMap::new(),
+            biometric_sessions: std::collections::HashMap::new(),
             last_environment: bwx::protocol::Environment::default(),
             #[cfg(feature = "clipboard")]
             clipboard: arboard::Clipboard::new()

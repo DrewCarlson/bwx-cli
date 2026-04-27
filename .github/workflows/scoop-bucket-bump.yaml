@@ -1,0 +1,160 @@
+# TODO: create drewcarlson/scoop-bwx repo with bucket/bwx.json scaffold
+# before this workflow's first useful run. The workflow will still
+# merge as-is; it just needs the target repo and the SCOOP_BUCKET_TOKEN
+# secret (a PAT with `repo` scope on drewcarlson/scoop-bwx) wired up.
+name: scoop-bucket-bump
+
+# Triggered after `release.yaml` finishes successfully on a tag push.
+# Bumps `bucket/bwx.json` in the scoop bucket repo with the new
+# version, URL, and SHA256 (read from SHA256SUMS on the GitHub
+# Release). Mirrors the structure of `homebrew-bump.yaml`.
+#
+# Stable-only.
+
+on:
+  workflow_run:
+    workflows: ["release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to bump (e.g. v2.4.0). Leave blank for latest.'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    # Runs on every manual dispatch, and on workflow_run only when
+    # the upstream `release` job succeeded for a `v*` tag.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    env:
+      BUCKET_REPO: drewcarlson/scoop-bwx
+      MANIFEST_NAME: bwx
+    steps:
+      - name: Resolve tag + version
+        id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+            if [ -z "$tag" ]; then
+              tag=$(gh release view --repo "${{ github.repository }}" \
+                      --json tagName -q .tagName)
+              echo "::notice::manual run, no tag input — defaulting to latest release $tag"
+            fi
+          else
+            tag="${{ github.event.workflow_run.head_branch }}"
+          fi
+          ver="${tag#v}"
+          # scoop's `scoop install` resolves to the manifest version
+          # in the bucket; bumping on prereleases would point users
+          # at unstable bits.
+          if [ "$ver" != "${ver%%-*}" ]; then
+            echo "::notice::skipping prerelease tag $tag"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Download SHA256SUMS from the release
+        if: steps.ver.outputs.skip != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          gh release download "${{ steps.ver.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern 'SHA256SUMS' \
+            --output staging/SHA256SUMS
+
+      - name: Render manifest
+        if: steps.ver.outputs.skip != '1'
+        id: render
+        run: |
+          set -euo pipefail
+          ver="${{ steps.ver.outputs.ver }}"
+          tag="${{ steps.ver.outputs.tag }}"
+          fname="bwx-cli-${ver}-x86_64-pc-windows-msvc.zip"
+          # The release workflow's SHA256SUMS lists every artifact in
+          # `dist/`; pluck the Windows zip's row.
+          sha=$(grep -E "  ${fname}\$" staging/SHA256SUMS | awk '{print $1}')
+          if [ -z "$sha" ]; then
+            echo "::error::missing SHA256 for $fname in SHA256SUMS"
+            exit 1
+          fi
+          url="https://github.com/${{ github.repository }}/releases/download/${tag}/${fname}"
+
+          # scoop manifest schema:
+          # https://github.com/ScoopInstaller/Scoop/wiki/App-Manifests
+          mkdir -p staging/bucket
+          cat > staging/bucket/${MANIFEST_NAME}.json <<EOF
+          {
+              "version": "${ver}",
+              "description": "Bitwarden CLI client (bwx-cli)",
+              "homepage": "https://github.com/${{ github.repository }}",
+              "license": "MIT",
+              "architecture": {
+                  "64bit": {
+                      "url": "${url}",
+                      "hash": "${sha}",
+                      "extract_dir": "bwx-cli-${ver}-x86_64-pc-windows-msvc"
+                  }
+              },
+              "bin": [
+                  "bwx.exe",
+                  "bwx-agent.exe"
+              ],
+              "checkver": "github",
+              "autoupdate": {
+                  "architecture": {
+                      "64bit": {
+                          "url": "https://github.com/${{ github.repository }}/releases/download/v\$version/bwx-cli-\$version-x86_64-pc-windows-msvc.zip",
+                          "extract_dir": "bwx-cli-\$version-x86_64-pc-windows-msvc"
+                      }
+                  }
+              }
+          }
+          EOF
+          echo "rendered manifest:"
+          cat staging/bucket/${MANIFEST_NAME}.json
+
+      - name: Push manifest to bucket
+        if: steps.ver.outputs.skip != '1'
+        env:
+          GH_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+        run: |
+          set -euo pipefail
+          ver="${{ steps.ver.outputs.ver }}"
+
+          # Clone the bucket with the PAT so subsequent push works.
+          git clone --depth 1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/${BUCKET_REPO}.git" bucket
+          cd bucket
+          git config user.name  "bwx-cli release bot"
+          git config user.email "bwx-cli-release-bot@users.noreply.github.com"
+
+          mkdir -p bucket
+          cp ../staging/bucket/${MANIFEST_NAME}.json bucket/${MANIFEST_NAME}.json
+
+          git add bucket/${MANIFEST_NAME}.json
+          if git diff --quiet --cached HEAD -- bucket/${MANIFEST_NAME}.json; then
+            echo "::notice::manifest already up to date for v$ver — nothing to push"
+            exit 0
+          fi
+
+          git commit -m "${MANIFEST_NAME} ${ver}" \
+                     -m "Auto-generated from drewcarlson/bwx-cli@${{ steps.ver.outputs.tag }}."
+          # Push directly to main — scoop buckets conventionally live
+          # without a PR-gating workflow. Mirror that shape.
+          git push origin HEAD:main

@@ -36,7 +36,7 @@ pub fn config_show(key: Option<&str>) -> bin_error::Result<()> {
         "ssh_confirm_sign" => println!("{}", config.ssh_confirm_sign),
         "macos_unlock_dialog" => println!("{}", config.macos_unlock_dialog),
         "logging" => println!("{}", config.logging),
-        "touchid_gate" => println!("{}", config.touchid_gate),
+        "biometric_gate" => println!("{}", config.biometric_gate),
         other => {
             return Err(crate::bin_error::err!(
                 "invalid config key: {other}"
@@ -96,17 +96,17 @@ pub fn config_set(key: &str, value: &str) -> bin_error::Result<()> {
                 )
             })?;
         }
-        "touchid_gate" => {
-            let gate: bwx::touchid::Gate =
+        "biometric_gate" => {
+            let gate: bwx::biometric::Gate =
                 value.parse().map_err(crate::bin_error::Error::msg)?;
             #[cfg(not(target_os = "macos"))]
-            if !matches!(gate, bwx::touchid::Gate::Off) {
+            if !matches!(gate, bwx::biometric::Gate::Off) {
                 return Err(crate::bin_error::Error::msg(
-                    "touchid_gate is only supported on macOS; the only \
+                    "biometric_gate is only supported on macOS; the only \
                      accepted value on this platform is 'off'",
                 ));
             }
-            config.touchid_gate = gate;
+            config.biometric_gate = gate;
         }
         _ => return Err(crate::bin_error::err!("invalid config key: {key}")),
     }
@@ -148,7 +148,7 @@ pub fn config_unset(key: &str) -> bin_error::Result<()> {
         "logging" => {
             config.logging = bwx::config::default_logging();
         }
-        "touchid_gate" => config.touchid_gate = bwx::touchid::Gate::Off,
+        "biometric_gate" => config.biometric_gate = bwx::biometric::Gate::Off,
         _ => return Err(crate::bin_error::err!("invalid config key: {key}")),
     }
     config.save()?;

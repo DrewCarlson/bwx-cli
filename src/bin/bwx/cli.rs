@@ -293,36 +293,39 @@ pub enum Opt {
     SshSocket,
 
     #[cfg(target_os = "macos")]
-    #[command(name = "touchid", about = "Manage macOS Touch ID enrollment")]
-    TouchId {
+    #[command(
+        name = "biometric",
+        about = "Manage biometric enrollment (Touch ID on macOS)"
+    )]
+    Biometric {
         #[command(subcommand)]
-        cmd: TouchIdCmd,
+        cmd: BiometricCmd,
     },
 
-    #[cfg(target_os = "macos")]
     #[command(
-        name = "setup-macos",
-        about = "Install the bwx-agent LaunchAgent + set SSH_AUTH_SOCK \
-            for GUI apps",
-        long_about = "One-shot macOS environment setup. Writes a \
-            LaunchAgent plist that exports `SSH_AUTH_SOCK` to the \
-            current login session at every login, so Finder/Spotlight-\
-            launched GUI apps (IDEs, git clients) see bwx-agent's ssh \
-            socket. Also runs `launchctl setenv` for the current \
-            session so existing GUI apps can be Cmd-Q'd and relaunched \
-            without a logout."
+        name = "setup-os",
+        about = "Install per-platform integration (LaunchAgents on macOS; \
+            not yet implemented elsewhere)",
+        long_about = "One-shot per-platform environment setup. On macOS: \
+            writes a LaunchAgent plist that exports `SSH_AUTH_SOCK` to \
+            the current login session at every login, so Finder/\
+            Spotlight-launched GUI apps (IDEs, git clients) see \
+            bwx-agent's ssh socket, and runs `launchctl setenv` for the \
+            current session so existing GUI apps can be Cmd-Q'd and \
+            relaunched without a logout. On other platforms: not yet \
+            implemented; prints a notice and exits successfully."
     )]
-    SetupMacos {
+    SetupOs {
         #[arg(long, help = "Overwrite any existing LaunchAgent file")]
         force: bool,
     },
 
-    #[cfg(target_os = "macos")]
     #[command(
-        name = "teardown-macos",
-        about = "Uninstall what `bwx setup-macos` created"
+        name = "teardown-os",
+        about = "Uninstall what `bwx setup-os` created (macOS; on other \
+            platforms: not yet implemented)"
     )]
-    TeardownMacos,
+    TeardownOs,
 
     #[command(
         name = "gen-completions",
@@ -383,13 +386,11 @@ impl Opt {
             Self::SshAllowedSigners => "ssh-allowed-signers".to_string(),
             Self::SshSocket => "ssh-socket".to_string(),
             #[cfg(target_os = "macos")]
-            Self::TouchId { cmd } => {
-                format!("touchid {}", cmd.subcommand_name())
+            Self::Biometric { cmd } => {
+                format!("biometric {}", cmd.subcommand_name())
             }
-            #[cfg(target_os = "macos")]
-            Self::SetupMacos { .. } => "setup-macos".to_string(),
-            #[cfg(target_os = "macos")]
-            Self::TeardownMacos => "teardown-macos".to_string(),
+            Self::SetupOs { .. } => "setup-os".to_string(),
+            Self::TeardownOs => "teardown-os".to_string(),
             Self::GenCompletions { .. } => "gen-completions".to_string(),
         }
     }
@@ -406,22 +407,22 @@ pub enum CompletionShell {
 
 #[cfg(target_os = "macos")]
 #[derive(Debug, clap::Parser)]
-pub enum TouchIdCmd {
+pub enum BiometricCmd {
     #[command(
         about = "Enroll the current vault under a Touch ID-gated Keychain \
             wrapper key"
     )]
     Enroll,
     #[command(
-        about = "Remove the Touch ID enrollment (Keychain item + blob)"
+        about = "Remove the biometric enrollment (Keychain item + blob)"
     )]
     Disable,
-    #[command(about = "Show the current Touch ID enrollment status")]
+    #[command(about = "Show the current biometric enrollment status")]
     Status,
 }
 
 #[cfg(target_os = "macos")]
-impl TouchIdCmd {
+impl BiometricCmd {
     fn subcommand_name(&self) -> &'static str {
         match self {
             Self::Enroll => "enroll",
@@ -449,7 +450,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "ssh_confirm_sign",
     "macos_unlock_dialog",
     "logging",
-    "touchid_gate",
+    "biometric_gate",
 ];
 
 #[derive(Debug, clap::Parser)]

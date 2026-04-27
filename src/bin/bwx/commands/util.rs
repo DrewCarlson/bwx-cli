@@ -1,5 +1,3 @@
-use std::os::unix::ffi::OsStrExt as _;
-
 use crate::bin_error::{self, ContextExt as _};
 
 pub(super) const MISSING_CONFIG_HELP: &str =
@@ -168,9 +166,8 @@ pub(super) fn ensure_agent() -> bin_error::Result<()> {
 
 fn run_agent() -> bin_error::Result<()> {
     let agent_path = std::env::var_os("BWX_AGENT");
-    let agent_path = agent_path
-        .as_deref()
-        .unwrap_or_else(|| std::ffi::OsStr::from_bytes(b"bwx-agent"));
+    let default_agent = std::ffi::OsStr::new("bwx-agent");
+    let agent_path = agent_path.as_deref().unwrap_or(default_agent);
     let status = std::process::Command::new(agent_path)
         .status()
         .context("failed to run bwx-agent")?;

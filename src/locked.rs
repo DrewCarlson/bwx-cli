@@ -2,12 +2,14 @@ use zeroize::Zeroize as _;
 
 const LEN: usize = 4096;
 
+#[cfg(unix)]
 static MLOCK_WORKS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 /// RAII guard around `mlock`/`munlock`. `munlock` can spuriously fail with
 /// `ENOMEM` on musl under `RLIMIT_MEMLOCK` pressure (common in CI
 /// containers); pages are released on process exit anyway, so unlock is
 /// best-effort and never panics on drop.
+#[cfg(unix)]
 struct MlockGuard {
     ptr: *mut core::ffi::c_void,
     len: usize,
@@ -15,9 +17,12 @@ struct MlockGuard {
 
 // The guard only tracks an address + length owned for the lifetime of the
 // owning `FixedVec`; safe to move across threads.
+#[cfg(unix)]
 unsafe impl Send for MlockGuard {}
+#[cfg(unix)]
 unsafe impl Sync for MlockGuard {}
 
+#[cfg(unix)]
 impl Drop for MlockGuard {
     fn drop(&mut self) {
         // SAFETY: (ptr, len) came from a successful `mlock` call on a
@@ -27,6 +32,7 @@ impl Drop for MlockGuard {
     }
 }
 
+#[cfg(unix)]
 fn try_mlock(ptr: *const u8, len: usize) -> rustix::io::Result<MlockGuard> {
     // rustix takes *mut c_void to match the POSIX signature, even though
     // mlock doesn't mutate.
@@ -34,6 +40,51 @@ fn try_mlock(ptr: *const u8, len: usize) -> rustix::io::Result<MlockGuard> {
     // SAFETY: `ptr` points to a live allocation of at least `len` bytes
     // owned by the caller.
     unsafe { rustix::mm::mlock(p, len) }?;
+    Ok(MlockGuard { ptr: p, len })
+}
+
+#[cfg(windows)]
+static MLOCK_WORKS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+#[cfg(windows)]
+struct MlockGuard {
+    ptr: *mut core::ffi::c_void,
+    len: usize,
+}
+
+#[cfg(windows)]
+unsafe impl Send for MlockGuard {}
+#[cfg(windows)]
+unsafe impl Sync for MlockGuard {}
+
+#[cfg(windows)]
+impl Drop for MlockGuard {
+    fn drop(&mut self) {
+        // SAFETY: (ptr, len) came from a successful VirtualLock on a live
+        // allocation; VirtualUnlock is best-effort and pages are released
+        // on process exit anyway.
+        unsafe {
+            let _ = windows_sys::Win32::System::Memory::VirtualUnlock(
+                self.ptr, self.len,
+            );
+        }
+    }
+}
+
+#[cfg(windows)]
+fn try_mlock(
+    ptr: *const u8,
+    len: usize,
+) -> std::io::Result<MlockGuard> {
+    let p = ptr.cast::<core::ffi::c_void>().cast_mut();
+    // SAFETY: `ptr` points to a live allocation of at least `len` bytes
+    // owned by the caller.
+    let ok = unsafe {
+        windows_sys::Win32::System::Memory::VirtualLock(p, len)
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
     Ok(MlockGuard { ptr: p, len })
 }
 
@@ -95,6 +146,28 @@ pub struct Vec {
 impl Default for Vec {
     fn default() -> Self {
         let data = Box::new(FixedVec::<LEN>::new());
+        #[cfg(unix)]
+        let lock = match MLOCK_WORKS.get() {
+            Some(true) => {
+                try_mlock(data.as_ptr(), FixedVec::<LEN>::capacity()).ok()
+            }
+            Some(false) => None,
+            None => {
+                match try_mlock(data.as_ptr(), FixedVec::<LEN>::capacity()) {
+                    Ok(lock) => {
+                        let _ = MLOCK_WORKS.set(true);
+                        Some(lock)
+                    }
+                    Err(e) => {
+                        if MLOCK_WORKS.set(false).is_ok() {
+                            eprintln!("failed to lock memory region: {e}");
+                        }
+                        None
+                    }
+                }
+            }
+        };
+        #[cfg(windows)]
         let lock = match MLOCK_WORKS.get() {
             Some(true) => {
                 try_mlock(data.as_ptr(), FixedVec::<LEN>::capacity()).ok()

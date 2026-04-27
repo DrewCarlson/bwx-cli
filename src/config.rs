@@ -34,10 +34,10 @@ pub struct Config {
     pub logging: bool,
     #[serde(
         default,
-        with = "touchid_gate_serde",
-        skip_serializing_if = "is_touchid_gate_off"
+        with = "biometric_gate_serde",
+        skip_serializing_if = "is_biometric_gate_off"
     )]
-    pub touchid_gate: crate::touchid::Gate,
+    pub biometric_gate: crate::biometric::Gate,
     // backcompat, no longer generated in new configs
     #[serde(skip_serializing)]
     pub device_id: Option<String>,
@@ -59,7 +59,7 @@ impl Default for Config {
             ssh_confirm_sign: false,
             macos_unlock_dialog: default_macos_unlock_dialog(),
             logging: default_logging(),
-            touchid_gate: crate::touchid::Gate::Off,
+            biometric_gate: crate::biometric::Gate::Off,
             device_id: None,
         }
     }
@@ -86,18 +86,18 @@ pub const fn default_logging() -> bool {
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_touchid_gate_off(g: &crate::touchid::Gate) -> bool {
-    matches!(g, crate::touchid::Gate::Off)
+fn is_biometric_gate_off(g: &crate::biometric::Gate) -> bool {
+    matches!(g, crate::biometric::Gate::Off)
 }
 
-mod touchid_gate_serde {
+mod biometric_gate_serde {
     use std::str::FromStr as _;
 
     use serde::{Deserialize as _, Deserializer, Serializer};
 
     #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn serialize<S: Serializer>(
-        g: &crate::touchid::Gate,
+        g: &crate::biometric::Gate,
         s: S,
     ) -> Result<S::Ok, S::Error> {
         s.serialize_str(&g.to_string())
@@ -105,9 +105,9 @@ mod touchid_gate_serde {
 
     pub fn deserialize<'de, D: Deserializer<'de>>(
         d: D,
-    ) -> Result<crate::touchid::Gate, D::Error> {
+    ) -> Result<crate::biometric::Gate, D::Error> {
         let s = String::deserialize(d)?;
-        crate::touchid::Gate::from_str(&s).map_err(serde::de::Error::custom)
+        crate::biometric::Gate::from_str(&s).map_err(serde::de::Error::custom)
     }
 }
 
@@ -165,6 +165,7 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
+        #[cfg(unix)]
         use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
         let file = crate::dirs::config_file();
         // unwrap is safe here because Self::filename is explicitly
@@ -175,24 +176,25 @@ impl Config {
                 file: file.clone(),
             },
         )?;
-        let mut fh = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&file)
-            .map_err(|source| Error::SaveConfig {
-                source,
-                file: file.clone(),
-            })?;
-        // `OpenOptions::mode` only applies on file creation; tighten
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        opts.mode(0o600);
+        let fh = opts.open(&file).map_err(|source| Error::SaveConfig {
+            source,
+            file: file.clone(),
+        })?;
+        // On Unix, `OpenOptions::mode` only applies on creation; tighten
         // unconditionally so a pre-existing loose-mode file is corrected
-        // on every write.
+        // on every write. On Windows, the parent directory's per-user
+        // DACL (see dirs.rs) provides equivalent isolation.
+        #[cfg(unix)]
         fh.set_permissions(std::fs::Permissions::from_mode(0o600))
             .map_err(|source| Error::SaveConfig {
                 source,
                 file: file.clone(),
             })?;
+        let mut fh = fh;
         fh.write_all(
             serde_json::to_string(self)
                 .map_err(|source| Error::SaveConfigJson {
@@ -310,25 +312,24 @@ pub async fn device_id(config: &Config) -> Result<String> {
             })?;
         Ok(s.trim().to_string())
     } else {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt as _;
         let id = config.device_id.as_ref().map_or_else(
             || crate::uuid::new_v4().to_string(),
             String::to_string,
         );
-        let mut fh = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&file)
-            .await
-            .map_err(|e| Error::LoadDeviceId {
+        let mut opts = tokio::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        opts.mode(0o600);
+        let mut fh =
+            opts.open(&file).await.map_err(|e| Error::LoadDeviceId {
                 source: e,
                 file: file.clone(),
             })?;
-        // `OpenOptions::mode` only applies on create; tighten
-        // unconditionally so a pre-existing loose-mode file gets
-        // corrected on the next write.
+        // Unix: tighten in case the file pre-existed with loose mode.
+        // Windows: the parent dir's per-user DACL covers isolation.
+        #[cfg(unix)]
         fh.set_permissions(std::fs::Permissions::from_mode(0o600))
             .await
             .map_err(|e| Error::LoadDeviceId {

@@ -1,8 +1,8 @@
 mod auth;
+mod biometric;
 mod crypto;
 mod ssh;
 mod sync;
-mod touchid;
 mod util;
 
 pub use auth::{check_lock, lock, login, register, unlock};
@@ -14,4 +14,4 @@ pub use ssh::{
     locate_ssh_private_key,
 };
 pub use sync::sync;
-pub use touchid::{touchid_disable, touchid_enroll, touchid_status};
+pub use biometric::{biometric_disable, biometric_enroll, biometric_status};

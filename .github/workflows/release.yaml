@@ -47,6 +47,10 @@ jobs:
           - target: x86_64-apple-darwin
             runner: macos-latest
             packager: tarball
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            packager: zip-msi
+          # arm64-pc-windows-msvc is deferred — see SPIKE_WINDOWS.md §9.
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -82,9 +86,17 @@ jobs:
       # job is fragile. Completions are pure text and target-
       # independent, so generating them before signing is fine.
       - name: Generate shell completions
+        # Use bash explicitly on Windows runners — default shell there
+        # is PowerShell, but this script is straight POSIX. Git Bash
+        # ships preinstalled on `windows-latest`.
+        shell: bash
         run: |
           mkdir -p target/${{ matrix.target }}/release/completion
           BWX=target/${{ matrix.target }}/release/bwx
+          # Append `.exe` on Windows so the shell can actually exec it.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            BWX="${BWX}.exe"
+          fi
           # On cross-compiled or different-arch matrix entries the
           # target binary won't exec on this host (different libc /
           # arch) — fall back to a host build for completion
@@ -92,10 +104,38 @@ jobs:
           if ! "$BWX" --version >/dev/null 2>&1; then
             cargo build --release --bin bwx
             BWX=target/release/bwx
+            [ "$RUNNER_OS" = "Windows" ] && BWX="${BWX}.exe"
           fi
           "$BWX" gen-completions bash > target/${{ matrix.target }}/release/completion/bash
           "$BWX" gen-completions zsh  > target/${{ matrix.target }}/release/completion/zsh
           "$BWX" gen-completions fish > target/${{ matrix.target }}/release/completion/fish
+
+      # ---- Windows code-signing (Azure Trusted Signing) ----
+      # Microsoft-managed code-signing cert chained to "Microsoft
+      # Public RSA Code Signing Root". No key material on the runner;
+      # the action authenticates with an AAD service principal and
+      # the signing service hashes the binaries server-side. RFC3161
+      # timestamp ensures signatures remain valid past cert expiry.
+      # Skipped automatically on PRs / dispatch runs without the AAD
+      # secrets configured (e.g., forks); identical posture to the
+      # macOS signing block below.
+      - name: Sign Windows binaries (Azure Trusted Signing)
+        if: runner.os == 'Windows' && env.AZURE_TENANT_ID != ''
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        uses: azure/trusted-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
+        with:
+          azure-tenant-id:     ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id:     ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint:            https://eus.codesigning.azure.net/
+          code-signing-account-name: bwx-cli
+          certificate-profile-name:  bwx-public-trust
+          files-folder: target/x86_64-pc-windows-msvc/release
+          files-folder-filter: exe
+          file-digest:        SHA256
+          timestamp-rfc3161:  http://timestamp.acs.microsoft.com
+          timestamp-digest:   SHA256
 
       # ---- macOS code-signing (Developer ID Application) ----
       # Imports the Developer ID .p12 cert into a per-job tmp keychain,
@@ -142,6 +182,7 @@ jobs:
           ./scripts/sign-macos.sh "target/${{ matrix.target }}/release"
 
       - name: Stage standalone tarball
+        if: runner.os != 'Windows'
         run: |
           set -euo pipefail
           ver="${GITHUB_REF_NAME#v}"
@@ -154,6 +195,79 @@ jobs:
           cp README.md LICENSE CHANGELOG.md                   "dist/$stage/"
           tar -C dist -czf "dist/${stage}.tar.gz" "$stage"
           rm -rf "dist/$stage"
+
+      # Windows analogue of "Stage standalone tarball": ship a `.zip`
+      # instead of a `.tar.gz` (winget + scoop both consume zip-based
+      # portable installers natively). PowerShell's `Compress-Archive`
+      # is preinstalled on `windows-latest`.
+      - name: Stage standalone zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ver = $env:GITHUB_REF_NAME -replace '^v',''
+          if ([string]::IsNullOrEmpty($ver)) { $ver = 'dev' }
+          $stage = "bwx-cli-$ver-${{ matrix.target }}"
+          $stageDir = "dist/$stage"
+          New-Item -ItemType Directory -Force -Path "$stageDir/completion" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/bwx.exe"       "$stageDir/"
+          Copy-Item "target/${{ matrix.target }}/release/bwx-agent.exe" "$stageDir/"
+          Copy-Item "target/${{ matrix.target }}/release/completion/*"  "$stageDir/completion/"
+          Copy-Item README.md, LICENSE, CHANGELOG.md                    "$stageDir/"
+          Compress-Archive -Path "$stageDir" -DestinationPath "dist/$stage.zip" -Force
+          Remove-Item -Recurse -Force $stageDir
+          # Emit the version for downstream MSI step.
+          "MSI_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # ---- WiX MSI build (Windows only) ----
+      # Per-user MSI installs to %LOCALAPPDATA%\Programs\bwx and
+      # appends that dir to the user's PATH. Published only as a
+      # GitHub Release artifact (winget + scoop pull the .zip).
+      - name: Install WiX 4 toolset
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: dotnet tool install --global wix --version 4.*
+
+      - name: Build MSI installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ver = $env:MSI_VERSION
+          # WiX requires a 4-part numeric version in the ProductVersion
+          # element. Strip any prerelease suffix (`-rc01`) and pad to
+          # MAJOR.MINOR.PATCH.0 — the marketing string ($ver) still
+          # gets used in product-name + filename.
+          $numericVer = ($ver -split '-')[0]
+          if (($numericVer -split '\.').Count -lt 4) {
+            $numericVer = "$numericVer.0"
+          }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $msiPath = "dist/bwx-cli-$ver-x86_64-pc-windows-msvc.msi"
+          wix build packaging/wix/bwx.wxs `
+            -arch x64 `
+            -d "Version=$numericVer" `
+            -d "DisplayVersion=$ver" `
+            -d "ExeDir=target/x86_64-pc-windows-msvc/release" `
+            -o $msiPath
+
+      - name: Sign MSI installer (Azure Trusted Signing)
+        if: runner.os == 'Windows' && env.AZURE_TENANT_ID != ''
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        uses: azure/trusted-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
+        with:
+          azure-tenant-id:     ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id:     ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint:            https://eus.codesigning.azure.net/
+          code-signing-account-name: bwx-cli
+          certificate-profile-name:  bwx-public-trust
+          files-folder: dist
+          files-folder-filter: msi
+          file-digest:        SHA256
+          timestamp-rfc3161:  http://timestamp.acs.microsoft.com
+          timestamp-digest:   SHA256
 
       - name: Build .deb + .rpm
         if: matrix.packager == 'deb-rpm'

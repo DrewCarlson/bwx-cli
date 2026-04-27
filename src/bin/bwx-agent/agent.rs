@@ -20,6 +20,129 @@ impl Agent {
         }
     }
 
+    #[cfg(windows)]
+    pub async fn run(
+        self,
+        mut listener: crate::sock::PipeListener,
+    ) -> bin_error::Result<()> {
+        pub enum Event {
+            Request(
+                std::io::Result<
+                    tokio::net::windows::named_pipe::NamedPipeServer,
+                >,
+            ),
+            Timeout(()),
+            Sync(()),
+        }
+
+        let notifications = self
+            .state
+            .lock()
+            .await
+            .notifications_handler
+            .get_channel()
+            .await;
+        let notifications =
+            tokio_stream::wrappers::UnboundedReceiverStream::new(
+                notifications,
+            )
+            .map(|message| match message {
+                crate::notifications::Message::Logout => Event::Timeout(()),
+                crate::notifications::Message::Sync => Event::Sync(()),
+            })
+            .boxed();
+
+        // Build an accept stream that yields one connection at a time.
+        // Each iteration: wait for connect on the current pre-created
+        // server, then rotate it out and pre-create the next instance
+        // so the next CLI client has something to connect to.
+        let (accept_tx, accept_rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = listener.server.connect().await {
+                    let _ = accept_tx.send(Err(e));
+                    continue;
+                }
+                let stream = match listener.rotate() {
+                    Ok(prev) => prev,
+                    Err(e) => {
+                        let _ = accept_tx.send(Err(e));
+                        continue;
+                    }
+                };
+                if accept_tx.send(Ok(stream)).is_err() {
+                    break;
+                }
+            }
+        });
+
+        let mut stream = futures_util::stream::select_all([
+            tokio_stream::wrappers::UnboundedReceiverStream::new(accept_rx)
+                .map(Event::Request)
+                .boxed(),
+            tokio_stream::wrappers::UnboundedReceiverStream::new(
+                self.timer_r,
+            )
+            .map(Event::Timeout)
+            .boxed(),
+            tokio_stream::wrappers::UnboundedReceiverStream::new(
+                self.sync_timer_r,
+            )
+            .map(Event::Sync)
+            .boxed(),
+            notifications,
+        ]);
+        while let Some(event) = stream.next().await {
+            match event {
+                Event::Request(res) => {
+                    let stream =
+                        res.context("failed to accept incoming connection")?;
+                    if let Err(e) = crate::sock::check_peer_uid(&stream) {
+                        log::warn!("rejecting connection: {e:#}");
+                        spawn_reject(stream, format!("{e:#}"));
+                        continue;
+                    }
+                    if let Err(e) = crate::peer_check::check_peer_team(
+                        crate::sock::peer_pid_of(&stream),
+                    ) {
+                        log::warn!("rejecting connection: {e:#}");
+                        spawn_reject(stream, format!("{e:#}"));
+                        continue;
+                    }
+                    let mut sock = crate::sock::Sock::new(stream);
+                    let state = self.state.clone();
+                    tokio::spawn(async move {
+                        let res =
+                            handle_request(&mut sock, state.clone()).await;
+                        if let Err(e) = res {
+                            sock.send(&bwx::protocol::Response::Error {
+                                error: format!("{e:#}"),
+                            })
+                            .await
+                            .unwrap();
+                        }
+                    });
+                }
+                Event::Timeout(()) => {
+                    self.state.lock().await.clear();
+                }
+                Event::Sync(()) => {
+                    let state = self.state.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) =
+                            crate::actions::sync(None, state.clone()).await
+                        {
+                            eprintln!("failed to sync: {e:#}");
+                        }
+                    });
+                    self.state.lock().await.set_sync_timeout();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
     pub async fn run(
         self,
         listener: tokio::net::UnixListener,
@@ -125,7 +248,19 @@ const RECV_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Send a single `Response::Error` over a connection we're refusing,
 /// then close it. Lets the peer fail fast with a real error string
 /// instead of blocking on an EOF detection on the recv side.
+#[cfg(unix)]
 fn spawn_reject(stream: tokio::net::UnixStream, error: String) {
+    tokio::spawn(async move {
+        let mut sock = crate::sock::Sock::new(stream);
+        let _ = sock.send(&bwx::protocol::Response::Error { error }).await;
+    });
+}
+
+#[cfg(windows)]
+fn spawn_reject(
+    stream: tokio::net::windows::named_pipe::NamedPipeServer,
+    error: String,
+) {
     tokio::spawn(async move {
         let mut sock = crate::sock::Sock::new(stream);
         let _ = sock.send(&bwx::protocol::Response::Error { error }).await;
@@ -175,8 +310,8 @@ async fn handle_request(
         }
         bwx::protocol::Action::Lock => {
             crate::actions::lock(sock, state.clone()).await?;
-            // Revoke Touch ID authorizations so the next unlock prompts.
-            state.lock().await.clear_touchid_sessions();
+            // Revoke biometric authorizations so the next unlock prompts.
+            state.lock().await.clear_biometric_sessions();
             false
         }
         bwx::protocol::Action::Sync => {
@@ -257,16 +392,16 @@ async fn handle_request(
             crate::actions::version(sock).await?;
             false
         }
-        bwx::protocol::Action::TouchIdEnroll => {
-            crate::actions::touchid_enroll(sock, state.clone()).await?;
+        bwx::protocol::Action::BiometricEnroll => {
+            crate::actions::biometric_enroll(sock, state.clone()).await?;
             true
         }
-        bwx::protocol::Action::TouchIdDisable => {
-            crate::actions::touchid_disable(sock).await?;
+        bwx::protocol::Action::BiometricDisable => {
+            crate::actions::biometric_disable(sock).await?;
             false
         }
-        bwx::protocol::Action::TouchIdStatus => {
-            crate::actions::touchid_status(sock).await?;
+        bwx::protocol::Action::BiometricStatus => {
+            crate::actions::biometric_status(sock).await?;
             false
         }
     };
