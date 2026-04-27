@@ -1,0 +1,126 @@
+name: aur-publish
+
+# Triggered after `release.yaml` finishes successfully on a tag push.
+# Renders the source-archive sha256 into `packaging/aur/bwx-cli/PKGBUILD`,
+# bumps `pkgver`, and pushes the result (with regenerated `.SRCINFO`)
+# to the AUR git repo at `ssh://aur@aur.archlinux.org/bwx-cli.git`.
+#
+# `bwx-cli-git` is *not* automated — it tracks `main` via its `pkgver()`
+# function and only needs intervention when the PKGBUILD itself changes.
+
+on:
+  workflow_run:
+    workflows: ["release"]
+    types: [completed]
+  # Manual trigger so a botched bump can be re-driven without
+  # cutting another tag. With no input it picks up the latest
+  # GitHub Release; pass an explicit `tag` (e.g. `v2.2.2`) to
+  # target a specific release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to bump (e.g. v2.2.2). Leave blank for latest.'
+        required: false
+        default: ''
+
+jobs:
+  publish:
+    # Runs on every manual dispatch, and on workflow_run only when
+    # the upstream `release` job succeeded for a `v*` tag.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    env:
+      PKGNAME: bwx-cli
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Resolve tag + version
+        id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+            if [ -z "$tag" ]; then
+              tag=$(gh release view --repo "${{ github.repository }}" \
+                      --json tagName -q .tagName)
+              echo "::notice::manual run, no tag input — defaulting to latest release $tag"
+            fi
+          else
+            tag="${{ github.event.workflow_run.head_branch }}"
+          fi
+          ver="${tag#v}"
+          # AUR ships stable only — pacman-compatible versions can't
+          # encode rc01-style suffixes cleanly, and a `bwx-cli` user
+          # who runs `pacman -Syu` shouldn't get unstable bits.
+          if [ "$ver" != "${ver%%-*}" ]; then
+            echo "::notice::skipping prerelease tag $tag"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Compute source-archive sha256
+        if: steps.ver.outputs.skip != '1'
+        id: src
+        run: |
+          set -euo pipefail
+          tag="${{ steps.ver.outputs.tag }}"
+          # GitHub serves tag tarballs at this canonical path; the AUR
+          # PKGBUILD's `source=` line points here too, so the sha must
+          # be computed against the same URL the build will fetch.
+          url="https://github.com/${{ github.repository }}/archive/refs/tags/${tag}.tar.gz"
+          tarball="$RUNNER_TEMP/src.tar.gz"
+          curl -fsSL --retry 3 -o "$tarball" "$url"
+          sha=$(sha256sum "$tarball" | awk '{print $1}')
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "::notice::source tarball sha256: $sha"
+
+      - name: Render PKGBUILD
+        if: steps.ver.outputs.skip != '1'
+        run: |
+          set -euo pipefail
+          ver="${{ steps.ver.outputs.ver }}"
+          sha="${{ steps.src.outputs.sha }}"
+
+          mkdir -p staging
+          src="packaging/aur/${PKGNAME}/PKGBUILD"
+          out="staging/PKGBUILD"
+          cp "$src" "$out"
+
+          # Bump pkgver and replace the SKIP placeholder with the real
+          # sha256 of the GitHub-hosted tag tarball. `pkgrel=1` on every
+          # version bump — that's the AUR convention for upstream-only
+          # changes; downstream-only fixes get a `pkgrel` increment
+          # which we'd handle in a follow-up commit.
+          sed -i -E "s|^pkgver=.*|pkgver=${ver}|" "$out"
+          sed -i -E "s|^pkgrel=.*|pkgrel=1|" "$out"
+          sed -i -E "s|^sha256sums=\\('SKIP'\\)|sha256sums=('${sha}')|" "$out"
+
+          # Sanity: the rewrites must have actually fired. `grep -q` here
+          # is a noisy guardrail against a future PKGBUILD edit drifting
+          # from these patterns and silently shipping `pkgver=2.0.0`
+          # forever.
+          grep -q "^pkgver=${ver}\$" "$out"
+          grep -q "^sha256sums=('${sha}')\$" "$out"
+
+          echo "rendered PKGBUILD:"
+          cat "$out"
+
+      - name: Publish to AUR
+        if: steps.ver.outputs.skip != '1'
+        uses: KSXGitHub/github-actions-deploy-aur@da03e160361ce01bf087e790b6ffd196d7dccff7 # v4.1.3
+        with:
+          pkgname: ${{ env.PKGNAME }}
+          pkgbuild: staging/PKGBUILD
+          commit_username: ${{ secrets.AUR_USERNAME }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Update to ${{ steps.ver.outputs.ver }}"
+          ssh_keyscan_types: rsa,ecdsa,ed25519
